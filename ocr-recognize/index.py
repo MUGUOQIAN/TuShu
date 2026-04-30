@@ -1,10 +1,40 @@
 import json
-from http.server import BaseHTTPRequestHandler
 from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
 
-SERVICE_VERSION = "ocr-recognize-2026-04-30-v3"
+SERVICE_VERSION = "ocr-recognize-2026-04-30-v4"
+
+
+def _normalize_fc_event(event):
+    """
+    阿里云 HTTP 触发器里 event 可能是 str/bytes 或 body/query 为 bytes，
+    统一成 dict，且 body 为 str（JSON 文本）或保持为已解析的 dict。
+    """
+    if isinstance(event, (bytes, bytearray)):
+        event = event.decode("utf-8", errors="replace")
+    if isinstance(event, str):
+        event = json.loads(event)
+    if not isinstance(event, dict):
+        raise TypeError(f"event 类型不受支持: {type(event).__name__}")
+
+    qp = event.get("queryParameters")
+    if qp is None:
+        qp = {}
+    elif isinstance(qp, (bytes, bytearray)):
+        qp = json.loads(qp.decode("utf-8", errors="replace"))
+    elif isinstance(qp, str):
+        qp = json.loads(qp) if qp.strip() else {}
+    if not isinstance(qp, dict):
+        qp = {}
+
+    raw_body = event.get("body", "{}")
+    if isinstance(raw_body, (bytes, bytearray)):
+        raw_body = raw_body.decode("utf-8", errors="replace")
+    if raw_body is None or (isinstance(raw_body, str) and not raw_body.strip()):
+        raw_body = "{}"
+
+    return {**event, "queryParameters": qp, "body": raw_body}
 
 
 def handler(event, context):
@@ -14,13 +44,19 @@ def handler(event, context):
     返回：{"success": true, "data": {"姓名": "张三", ...}, "error": ""}
     """
     try:
+        event = _normalize_fc_event(event)
+
         # 0. 版本探针：用于确认线上是否命中新部署
         query = event.get("queryParameters", {}) or {}
         if query.get("ping") == "1":
             return _response(200, {"success": True, "version": SERVICE_VERSION})
 
         # 1. 解析请求
-        body = json.loads(event.get("body", "{}"))
+        raw = event.get("body", "{}")
+        if isinstance(raw, dict):
+            body = raw
+        else:
+            body = json.loads(raw)
         image_base64 = body.get("image_base64", "")
         template_type = body.get("template_type", "custom")
         custom_fields = body.get("custom_fields", "")
