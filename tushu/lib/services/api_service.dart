@@ -7,7 +7,7 @@ import '../models/template.dart';
 class ApiService {
   /// 生产环境：与 `ocr-recognize` 部署的 HTTP 触发器根 URL 一致。
   static const String _defaultBaseUrl =
-      "https://ocr-recognize-jczcoxesbt.cn-shanghai.fcapp.run";
+      "https://ocr-recognize-tkvdnxbzyt.cn-shanghai.fcapp.run";
 
   /// 联调本地后端示例：
   /// `flutter run --dart-define=OCR_API_BASE_URL=http://127.0.0.1:9000`

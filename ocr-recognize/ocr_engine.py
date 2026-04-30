@@ -6,6 +6,11 @@ import requests
 from PIL import Image
 from config import GLM_API_KEY, PRIMARY_MODEL
 
+try:
+    _LANCZOS = Image.Resampling.LANCZOS  # Pillow>=9.1
+except AttributeError:
+    _LANCZOS = Image.LANCZOS  # Pillow<9.1
+
 
 def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
     """
@@ -63,6 +68,10 @@ def _compress_base64_image(
     image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
 ) -> str:
     image_bytes = base64.b64decode(image_base64)
+    # 输入已较小则不再二次压缩，避免姓名等细节文字丢失。
+    if len(image_bytes) <= 300 * 1024:
+        return image_base64
+
     with Image.open(io.BytesIO(image_bytes)) as img:
         img = img.convert("RGB")
         width, height = img.size
@@ -70,7 +79,7 @@ def _compress_base64_image(
         if long_edge > max_edge:
             scale = max_edge / long_edge
             new_size = (int(width * scale), int(height * scale))
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
+            img = img.resize(new_size, _LANCZOS)
 
         quality = 75
         while quality >= 35:
@@ -212,13 +221,16 @@ def _extract_name(chunks: list[str]) -> str:
         "building",
     )
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Manager", "Director")
+    company_en_keywords = ("co", "ltd", "inc", "corporation", "machinery", "shanghai", "jiuxie", "company")
     cn_name_pattern = re.compile(r"[\u4e00-\u9fa5]{2,4}")
     en_name_pattern = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\b")
     cn_en_combo_pattern = re.compile(
         r"([\u4e00-\u9fa5]{2,4})\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})"
     )
 
-    for chunk in chunks:
+    english_name_candidate = ""
+
+    for i, chunk in enumerate(chunks):
         c = chunk.strip()
         if not c:
             continue
@@ -244,10 +256,22 @@ def _extract_name(chunks: list[str]) -> str:
         en = en_name_pattern.search(c)
         if en:
             en_name = en.group(0)
-            if not _looks_like_address_phrase(en_name):
-                return en_name
+            en_low = en_name.lower()
+            looks_like_company = any(k in en_low for k in company_en_keywords)
+            if not _looks_like_address_phrase(en_name) and not looks_like_company:
+                # 若姓名行邻近职位行，优先作为最终姓名。
+                prev_chunk = chunks[i - 1] if i > 0 else ""
+                next_chunk = chunks[i + 1] if i + 1 < len(chunks) else ""
+                near_title = any(k in prev_chunk for k in title_keywords) or any(k in next_chunk for k in title_keywords)
+                if near_title:
+                    return en_name
+                if not english_name_candidate:
+                    english_name_candidate = en_name
 
     # 回退：全局搜索
+    if english_name_candidate:
+        return english_name_candidate
+
     cn = cn_name_pattern.search(text)
     if cn:
         cn_name = cn.group(0)
@@ -256,7 +280,9 @@ def _extract_name(chunks: list[str]) -> str:
     en = en_name_pattern.search(text)
     if en:
         en_name = en.group(0)
-        if not _looks_like_address_phrase(en_name):
+        en_low = en_name.lower()
+        looks_like_company = any(k in en_low for k in company_en_keywords)
+        if not _looks_like_address_phrase(en_name) and not looks_like_company:
             return en_name
     return ""
 

@@ -1,7 +1,13 @@
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+try:
+    # 本地开发时读取 .env；云端若未安装 python-dotenv 也不应启动失败
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
 
 # 从云函数环境变量读取，保护密钥安全
 GLM_API_KEY = os.environ.get("GLM_API_KEY", "")

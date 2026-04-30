@@ -1,9 +1,10 @@
 import json
+import traceback
 from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
 
-SERVICE_VERSION = "ocr-recognize-2026-04-30-v4"
+SERVICE_VERSION = "ocr-recognize-2026-04-30-v5"
 
 
 def _normalize_fc_event(event):
@@ -44,11 +45,18 @@ def handler(event, context):
     返回：{"success": true, "data": {"姓名": "张三", ...}, "error": ""}
     """
     try:
+        print(f"[handler] start version={SERVICE_VERSION}, event_type={type(event).__name__}")
         event = _normalize_fc_event(event)
+        raw_body = event.get("body", "{}")
+        body_len = len(raw_body) if isinstance(raw_body, str) else -1
+        print(
+            f"[handler] normalized event query_keys={list((event.get('queryParameters') or {}).keys())}, body_type={type(raw_body).__name__}, body_len={body_len}"
+        )
 
         # 0. 版本探针：用于确认线上是否命中新部署
         query = event.get("queryParameters", {}) or {}
         if query.get("ping") == "1":
+            print("[handler] ping probe hit")
             return _response(200, {"success": True, "version": SERVICE_VERSION})
 
         # 1. 解析请求
@@ -60,6 +68,9 @@ def handler(event, context):
         image_base64 = body.get("image_base64", "")
         template_type = body.get("template_type", "custom")
         custom_fields = body.get("custom_fields", "")
+        print(
+            f"[handler] request parsed template_type={template_type}, image_base64_len={len(image_base64) if isinstance(image_base64, str) else -1}"
+        )
 
         if not image_base64:
             return _response(400, {"success": False, "error": "缺少图片数据"})
@@ -80,17 +91,24 @@ def handler(event, context):
             return _response(400, {"success": False, "error": f"未知模板类型: {template_type}"})
 
         # 3. 调用大模型
+        print("[handler] call_llm start")
         raw_result = call_llm(image_base64, prompt)
+        print(f"[handler] call_llm done raw_result_type={type(raw_result).__name__}")
         normalized_result = _normalize_llm_result(raw_result)
 
         # 4. 校验清洗
         cleaned_result = validate_and_clean(normalized_result, fields)
+        print("[handler] success")
 
         return _response(200, {"success": True, "data": cleaned_result})
 
     except json.JSONDecodeError as e:
+        print(f"[handler] json decode error: {e}")
+        print(traceback.format_exc())
         return _response(400, {"success": False, "error": f"大模型返回格式异常: {str(e)}"})
     except Exception as e:
+        print(f"[handler] unhandled exception: {e}")
+        print(traceback.format_exc())
         return _response(500, {"success": False, "error": f"服务内部错误: {str(e)}"})
 
 
