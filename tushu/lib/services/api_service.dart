@@ -3,19 +3,27 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import '../models/template.dart';
 
+/// OCR 云函数（默认 [ocrBaseUrl] 为已部署的生产地址；本地可覆盖）。
 class ApiService {
+  /// 生产环境：与 `ocr-recognize` 部署的 HTTP 触发器根 URL 一致。
   static const String _defaultBaseUrl =
       "https://ocr-recognize-glkamxdxqt.cn-shanghai.fcapp.run";
-  // 可通过 --dart-define=OCR_API_BASE_URL=... 覆盖后端地址。
+
+  /// 联调本地后端示例：
+  /// `flutter run --dart-define=OCR_API_BASE_URL=http://127.0.0.1:9000`
   static const String _baseUrl = String.fromEnvironment(
     'OCR_API_BASE_URL',
     defaultValue: _defaultBaseUrl,
   );
 
+  /// 实际请求地址（与编译期 `OCR_API_BASE_URL` 或默认生产地址一致）。
+  static String get ocrBaseUrl => _baseUrl;
+
   static final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 30),
-    sendTimeout: const Duration(seconds: 30),
-    receiveTimeout: const Duration(seconds: 30),
+    connectTimeout: const Duration(seconds: 60),
+    sendTimeout: const Duration(seconds: 120),
+    receiveTimeout: const Duration(seconds: 120),
+    headers: {'Content-Type': 'application/json; charset=utf-8'},
   ));
 
   /// 调用后端OCR识别
