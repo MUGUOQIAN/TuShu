@@ -7,11 +7,11 @@
 
 - 本地服务地址: `http://127.0.0.1:9000`
 - 本地健康检查: `GET /?ping=1`
-- 当前版本标识: `ocr-recognize-2026-04-30-v5`
+- 当前版本标识: `ocr-recognize-2026-05-03-v6`
 - 主要能力:
   - 接收 `image_base64` + `template_type`
   - 调用 `glm-ocr` 做布局解析
-  - 基于解析文本做名片字段映射（姓名/公司/职位/手机/座机/邮箱/地址）
+  - 基于解析文本按模板做字段映射（名片/发票/自定义）
   - 支持函数计算 `event` 的 `bytes/str/dict` 归一化处理
   - Pillow 新旧版本兼容（`Image.Resampling.LANCZOS` / `Image.LANCZOS` 回退）
   - 小图（<=300KB）跳过二次压缩，减少姓名细节丢失
@@ -26,13 +26,15 @@
 ## 常用测试命令
 
 - 后端本地健康检查:
-  - `python -c "import requests;print(requests.get('http://127.0.0.1:9000?ping=1').text)"`
+  - `python3 -c "import requests;print(requests.get('http://127.0.0.1:9000?ping=1').text)"`
 - 后端本地名片测试（22222.jpg）:
-  - `python -c "import base64,requests;from pathlib import Path;img=Path('tushu/test/22222.jpg').read_bytes();b64=base64.b64encode(img).decode('utf-8');print(requests.post('http://127.0.0.1:9000',json={'image_base64':b64,'template_type':'business_card'}).text)"`
+  - `python3 -c "import base64,requests;from pathlib import Path;img=Path('tushu/test/22222.jpg').read_bytes();b64=base64.b64encode(img).decode('utf-8');print(requests.post('http://127.0.0.1:9000',json={'image_base64':b64,'template_type':'business_card'}).text)"`
 - Flutter 本地联调:
   - `cd tushu && flutter test test/api_service_businesscard_test.dart --dart-define=OCR_API_BASE_URL=http://127.0.0.1:9000`
 - Flutter 全量测试:
   - `cd tushu && flutter test`
+- 后端字段映射单元测试:
+  - `cd ocr-recognize && python3 -m unittest test_ocr_engine.py`
 
 ## 说明
 
