@@ -12,22 +12,39 @@ except AttributeError:
     _LANCZOS = Image.LANCZOS  # Pillow<9.1
 
 
-def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
+def call_llm(
+    image_base64: str,
+    prompt: str,
+    model: str = PRIMARY_MODEL,
+    template_type: str = "business_card",
+    expected_fields: list[str] | None = None,
+) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
     """
-    return _call_model(image_base64, prompt, model)
+    return _call_model(image_base64, prompt, model, template_type, expected_fields or [])
 
 
-def _call_model(image_base64: str, prompt: str, model: str) -> dict:
+def _call_model(
+    image_base64: str,
+    prompt: str,
+    model: str,
+    template_type: str,
+    expected_fields: list[str],
+) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
-        return _call_glm(image_base64, prompt)
+        return _call_glm(image_base64, prompt, template_type, expected_fields)
     else:
         raise ValueError(f"不支持的模型: {model}")
 
 
-def _call_glm(image_base64: str, prompt: str) -> dict:
+def _call_glm(
+    image_base64: str,
+    prompt: str,
+    template_type: str,
+    expected_fields: list[str],
+) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
         raise ValueError("缺少 GLM_API_KEY 环境变量")
@@ -54,14 +71,13 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
         return {}
 
     # 1) 优先尝试直接JSON结构（兼容不同返回形态）
-    if isinstance(data.get("data"), dict):
-        return data["data"]
-    if isinstance(data.get("result"), dict):
-        return data["result"]
+    direct_result = _direct_field_result(data, expected_fields)
+    if direct_result is not None:
+        return direct_result
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
+    # 2) 从 layout_parsing 结果中提取文本，再按请求模板映射字段。
     text_chunks = _extract_text_chunks(data)
-    return _map_business_card_fields(text_chunks)
+    return _map_layout_text_fields(text_chunks, template_type, expected_fields)
 
 
 def _compress_base64_image(
@@ -144,6 +160,60 @@ def _extract_text_chunks(data: dict) -> list[str]:
             seen.add(c)
             ordered.append(c)
     return ordered
+
+
+def _direct_field_result(data: dict, expected_fields: list[str]) -> dict | None:
+    candidates = []
+    for key in ("data", "result"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+
+    for candidate in candidates:
+        if not expected_fields or any(field in candidate for field in expected_fields):
+            return candidate
+    return None
+
+
+def _map_layout_text_fields(
+    chunks: list[str],
+    template_type: str,
+    expected_fields: list[str],
+) -> dict:
+    if template_type == "business_card":
+        return _map_business_card_fields(chunks)
+    if template_type == "invoice":
+        return _map_invoice_fields(chunks)
+    return _map_custom_fields(chunks, expected_fields)
+
+
+def _map_invoice_fields(chunks: list[str]) -> dict:
+    text = "\n".join(chunks)
+    return {
+        "发票号码": _first_match(r"(?:发票号码|发票号|号码)[:：\s]*([A-Za-z0-9-]{6,})", text),
+        "开票日期": _first_match(
+            r"(?:开票日期|日期)[:：\s]*(\d{4}[年/-]\d{1,2}[月/-]\d{1,2}日?)",
+            text,
+        ),
+        "购买方名称": _labeled_value(text, ("购买方名称", "购买方", "购方名称")),
+        "销售方名称": _labeled_value(text, ("销售方名称", "销售方", "销方名称")),
+        "价税合计金额": _labeled_value(text, ("价税合计金额", "价税合计", "合计金额")),
+        "税额": _labeled_value(text, ("税额",)),
+    }
+
+
+def _map_custom_fields(chunks: list[str], expected_fields: list[str]) -> dict:
+    text = "\n".join(chunks)
+    return {field: _labeled_value(text, (field,)) for field in expected_fields}
+
+
+def _labeled_value(text: str, labels: tuple[str, ...]) -> str:
+    for label in labels:
+        pattern = rf"{re.escape(label)}[:：\s]*([^\n\r]+)"
+        value = _first_match(pattern, text)
+        if value:
+            return value.strip()
+    return ""
 
 
 def _map_business_card_fields(chunks: list[str]) -> dict:
