@@ -119,10 +119,12 @@ def _extract_text_chunks(data: dict) -> list[str]:
     chunks: list[str] = []
 
     md_results = data.get("md_results")
-    if isinstance(md_results, list):
+    if isinstance(md_results, str):
+        _append_markdown_chunks(chunks, md_results)
+    elif isinstance(md_results, list):
         for item in md_results:
             if isinstance(item, str) and item.strip():
-                chunks.append(item.strip())
+                _append_markdown_chunks(chunks, item)
 
     layout_details = data.get("layout_details")
     if isinstance(layout_details, list):
@@ -144,6 +146,13 @@ def _extract_text_chunks(data: dict) -> list[str]:
             seen.add(c)
             ordered.append(c)
     return ordered
+
+
+def _append_markdown_chunks(chunks: list[str], text: str) -> None:
+    for line in text.splitlines():
+        normalized = line.strip().strip("#").strip()
+        if normalized:
+            chunks.append(normalized)
 
 
 def _map_business_card_fields(chunks: list[str]) -> dict:
