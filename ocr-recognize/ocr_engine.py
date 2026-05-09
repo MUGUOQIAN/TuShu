@@ -38,8 +38,7 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
         "Content-Type": "application/json"
     }
     # GLM-OCR 要求 file 使用 URL 或 data URI；先压缩可显著降低上传超时概率。
-    compressed_base64 = _compress_base64_image(image_base64)
-    file_data_uri = f"data:image/jpeg;base64,{compressed_base64}"
+    file_data_uri = _build_file_data_uri(image_base64)
     payload = {
         "model": "glm-ocr",
         "file": file_data_uri,
@@ -64,13 +63,26 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
     return _map_business_card_fields(text_chunks)
 
 
+def _build_file_data_uri(image_base64: str) -> str:
+    compressed_base64, mime_type = _prepare_base64_image(image_base64)
+    return f"data:{mime_type};base64,{compressed_base64}"
+
+
 def _compress_base64_image(
     image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
 ) -> str:
+    compressed_base64, _ = _prepare_base64_image(image_base64, max_edge, max_bytes)
+    return compressed_base64
+
+
+def _prepare_base64_image(
+    image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
+) -> tuple[str, str]:
     image_bytes = base64.b64decode(image_base64)
-    # 输入已较小则不再二次压缩，避免姓名等细节文字丢失。
-    if len(image_bytes) <= 300 * 1024:
-        return image_base64
+    mime_type = _detect_image_mime(image_bytes)
+    # 输入已较小则不再二次压缩，避免姓名等细节文字丢失；同时保留真实MIME。
+    if len(image_bytes) <= 300 * 1024 and mime_type in {"image/jpeg", "image/png"}:
+        return image_base64, mime_type
 
     with Image.open(io.BytesIO(image_bytes)) as img:
         img = img.convert("RGB")
@@ -87,10 +99,18 @@ def _compress_base64_image(
             img.save(output, format="JPEG", quality=quality, optimize=True)
             result = output.getvalue()
             if len(result) <= max_bytes or quality == 35:
-                return base64.b64encode(result).decode("utf-8")
+                return base64.b64encode(result).decode("utf-8"), "image/jpeg"
             quality -= 10
 
-    return image_base64
+    return image_base64, mime_type
+
+
+def _detect_image_mime(image_bytes: bytes) -> str:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    return "image/jpeg"
 
 
 def _parse_json_from_response(content: str) -> dict:
