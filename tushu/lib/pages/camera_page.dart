@@ -18,7 +18,7 @@ class CameraPage extends StatefulWidget {
 class _CameraPageState extends State<CameraPage> {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
-  TemplateType _selectedTemplate = TemplateType.custom;
+  TemplateType _selectedTemplate = TemplateType.businessCard;
   String _customFields = "";
   bool _isProcessing = false;
 
@@ -33,6 +33,7 @@ class _CameraPageState extends State<CameraPage> {
     if (_cameras.isNotEmpty) {
       _controller = CameraController(_cameras[0], ResolutionPreset.medium);
       await _controller!.initialize();
+      if (!mounted) return;
       setState(() {});
     }
   }
@@ -55,13 +56,14 @@ class _CameraPageState extends State<CameraPage> {
       source: ImageSource.gallery,
       imageQuality: 80, // 预压缩
     );
-    if (image != null) {
+    if (image != null && mounted) {
       _processImage(File(image.path));
     }
   }
 
   /// 处理图片：压缩→调API→跳转结果页
   Future<void> _processImage(File imageFile) async {
+    if (!mounted) return;
     setState(() => _isProcessing = true);
 
     try {
@@ -92,11 +94,14 @@ class _CameraPageState extends State<CameraPage> {
     } catch (e) {
       _showError("识别失败，请重试");
     } finally {
-      setState(() => _isProcessing = false);
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
     }
   }
 
   void _showError(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 

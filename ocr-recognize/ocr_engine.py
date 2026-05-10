@@ -51,7 +51,7 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
         raise RuntimeError(f"GLM请求失败 status={resp.status_code}, body={resp.text[:500]}")
     data = resp.json()
     if not isinstance(data, dict):
-        return {}
+        raise RuntimeError(f"GLM返回格式异常: {type(data).__name__}")
 
     # 1) 优先尝试直接JSON结构（兼容不同返回形态）
     if isinstance(data.get("data"), dict):
@@ -59,8 +59,10 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
     if isinstance(data.get("result"), dict):
         return data["result"]
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
+    # 2) layout_parsing 不接收抽取 prompt；只有名片模板有本地兜底映射。
     text_chunks = _extract_text_chunks(data)
+    if not _prompt_requests_business_card(prompt):
+        raise RuntimeError("GLM返回未包含结构化结果，当前仅支持名片模板的文本兜底映射")
     return _map_business_card_fields(text_chunks)
 
 
@@ -144,6 +146,11 @@ def _extract_text_chunks(data: dict) -> list[str]:
             seen.add(c)
             ordered.append(c)
     return ordered
+
+
+def _prompt_requests_business_card(prompt: str) -> bool:
+    business_card_fields = ("姓名", "公司", "职位", "手机", "座机", "邮箱", "地址")
+    return "名片" in prompt and all(field in prompt for field in business_card_fields)
 
 
 def _map_business_card_fields(chunks: list[str]) -> dict:
