@@ -45,15 +45,61 @@ class ExcelService {
 
     final sheet = excel['Sheet1'];
 
-    // 如果Sheet为空，先写表头
-    if (sheet.maxCols == 0) {
-      sheet.appendRow(data.keys.toList());
+    final existingHeaders = _readHeaderRow(sheet);
+    if (existingHeaders.isEmpty) {
+      final headers = data.keys.toList();
+      sheet.appendRow(headers);
+      sheet.appendRow(rowForHeaders(data, headers));
+    } else {
+      final headers = headersForAppend(existingHeaders, data.keys);
+      if (headers.length != existingHeaders.length) {
+        _writeHeaderRow(sheet, headers);
+      }
+      sheet.appendRow(rowForHeaders(data, headers));
     }
 
-    // 追加数据行
-    sheet.appendRow(data.values.toList());
-
     return await _saveExcel(excel, fileName);
+  }
+
+  /// 保留已有表头顺序，并把本次新增字段追加到表头末尾。
+  static List<String> headersForAppend(
+    List<String> existingHeaders,
+    Iterable<String> dataKeys,
+  ) {
+    final headers = List<String>.from(existingHeaders);
+    for (final key in dataKeys) {
+      if (!headers.contains(key)) {
+        headers.add(key);
+      }
+    }
+    return headers;
+  }
+
+  /// 按表头顺序生成数据行，避免Map插入顺序变化导致列错位。
+  static List<String> rowForHeaders(
+    Map<String, String> data,
+    List<String> headers,
+  ) {
+    return headers.map((header) => data[header] ?? "").toList();
+  }
+
+  static List<String> _readHeaderRow(Sheet sheet) {
+    if (sheet.maxRows == 0 || sheet.maxCols == 0 || sheet.rows.isEmpty) {
+      return [];
+    }
+
+    return sheet.rows.first
+        .map((cell) => cell?.value?.toString().trim() ?? "")
+        .where((header) => header.isNotEmpty)
+        .toList();
+  }
+
+  static void _writeHeaderRow(Sheet sheet, List<String> headers) {
+    for (var i = 0; i < headers.length; i++) {
+      sheet
+          .cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
+          .value = headers[i];
+    }
   }
 
   /// 保存Excel到本地

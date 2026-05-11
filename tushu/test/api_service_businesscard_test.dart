@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:tushu/models/template.dart';
-import 'package:tushu/services/API_service.dart';
+import 'package:tushu/services/api_service.dart';
 
 void main() {
   test('API recognize businessCard with real image', () async {
