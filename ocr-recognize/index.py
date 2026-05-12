@@ -1,10 +1,12 @@
 import json
 import traceback
+from config import MAX_IMAGE_SIZE
 from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
 
 SERVICE_VERSION = "ocr-recognize-2026-04-30-v5"
+REQUEST_BODY_SIZE_SLACK = 16 * 1024
 
 
 def _normalize_fc_event(event):
@@ -61,6 +63,8 @@ def handler(event, context):
 
         # 1. 解析请求
         raw = event.get("body", "{}")
+        if isinstance(raw, str) and len(raw) > MAX_IMAGE_SIZE + REQUEST_BODY_SIZE_SLACK:
+            return _payload_too_large_response()
         if isinstance(raw, dict):
             body = raw
         else:
@@ -74,6 +78,10 @@ def handler(event, context):
 
         if not image_base64:
             return _response(400, {"success": False, "error": "缺少图片数据"})
+        if not isinstance(image_base64, str):
+            return _response(400, {"success": False, "error": "图片数据格式无效"})
+        if len(image_base64) > MAX_IMAGE_SIZE:
+            return _payload_too_large_response()
 
         # 2. 获取模板
         if template_type == "custom":
@@ -122,6 +130,11 @@ def _response(status_code: int, body: dict) -> dict:
         },
         "body": json.dumps(body, ensure_ascii=False)
     }
+
+
+def _payload_too_large_response() -> dict:
+    max_mb = MAX_IMAGE_SIZE // (1024 * 1024)
+    return _response(413, {"success": False, "error": f"图片数据过大，请压缩到{max_mb}MB以内"})
 
 
 def _normalize_llm_result(raw_result) -> dict:
