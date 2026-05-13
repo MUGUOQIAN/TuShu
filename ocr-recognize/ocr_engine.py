@@ -209,8 +209,9 @@ def _extract_text_chunks(data: dict) -> list[str]:
 
     def append_text(value):
         if isinstance(value, str):
-            if value.strip():
-                chunks.append(value.strip())
+            for line in value.splitlines():
+                if line.strip():
+                    chunks.append(line.strip())
             return
         if isinstance(value, dict):
             content = value.get("content")
