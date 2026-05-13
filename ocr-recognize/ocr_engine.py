@@ -4,7 +4,11 @@ import json
 import re
 import requests
 from PIL import Image
-from config import GLM_API_KEY, PRIMARY_MODEL
+from config import GLM_API_KEY, PRIMARY_MODEL, VISION_MODEL
+
+LAYOUT_PARSING_URL = "https://open.bigmodel.cn/api/paas/v4/layout_parsing"
+CHAT_COMPLETIONS_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+LAYOUT_RESULT_KEYS = ("md_results", "layout_details", "layout_visualization", "data_info")
 
 try:
     _LANCZOS = Image.Resampling.LANCZOS  # Pillow>=9.1
@@ -12,27 +16,34 @@ except AttributeError:
     _LANCZOS = Image.LANCZOS  # Pillow<9.1
 
 
-def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
+def call_llm(
+    image_base64: str,
+    prompt: str,
+    model: str = PRIMARY_MODEL,
+    template_type: str = "custom",
+) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
     """
-    return _call_model(image_base64, prompt, model)
+    return _call_model(image_base64, prompt, model, template_type)
 
 
-def _call_model(image_base64: str, prompt: str, model: str) -> dict:
+def _call_model(image_base64: str, prompt: str, model: str, template_type: str) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
-        return _call_glm(image_base64, prompt)
-    else:
-        raise ValueError(f"不支持的模型: {model}")
+        if template_type == "business_card":
+            return _call_glm_ocr(image_base64)
+        return _call_glm_vision(image_base64, prompt, VISION_MODEL)
+    if model.startswith("glm-"):
+        return _call_glm_vision(image_base64, prompt, model)
+    raise ValueError(f"不支持的模型: {model}")
 
 
-def _call_glm(image_base64: str, prompt: str) -> dict:
+def _call_glm_ocr(image_base64: str) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
         raise ValueError("缺少 GLM_API_KEY 环境变量")
 
-    url = "https://open.bigmodel.cn/api/paas/v4/layout_parsing"
     headers = {
         "Authorization": f"Bearer {GLM_API_KEY}",
         "Content-Type": "application/json"
@@ -46,22 +57,60 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
         "need_layout_visualization": False,
     }
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    resp = requests.post(LAYOUT_PARSING_URL, headers=headers, json=payload, timeout=120)
     if resp.status_code >= 400:
         raise RuntimeError(f"GLM请求失败 status={resp.status_code}, body={resp.text[:500]}")
     data = resp.json()
     if not isinstance(data, dict):
         return {}
 
-    # 1) 优先尝试直接JSON结构（兼容不同返回形态）
-    if isinstance(data.get("data"), dict):
-        return data["data"]
-    if isinstance(data.get("result"), dict):
-        return data["result"]
+    layout_payload = _find_layout_payload(data)
+    if layout_payload is not None:
+        text_chunks = _extract_text_chunks(layout_payload)
+        return _map_business_card_fields(text_chunks)
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
-    text_chunks = _extract_text_chunks(data)
-    return _map_business_card_fields(text_chunks)
+    # 兼容非 layout_parsing 代理直接返回结构化字段的情况。
+    for key in ("data", "result"):
+        if isinstance(data.get(key), dict):
+            return data[key]
+    return data
+
+
+def _call_glm_vision(image_base64: str, prompt: str, model: str = VISION_MODEL) -> dict:
+    """调用支持图片+文本提示词的 GLM 视觉模型，按模板返回结构化JSON。"""
+    if not GLM_API_KEY:
+        raise ValueError("缺少 GLM_API_KEY 环境变量")
+
+    headers = {
+        "Authorization": f"Bearer {GLM_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    compressed_base64 = _compress_base64_image(image_base64)
+    file_data_uri = f"data:image/jpeg;base64,{compressed_base64}"
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": file_data_uri}},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "stream": False,
+        "do_sample": False,
+        "temperature": 0,
+        "max_tokens": 2048,
+    }
+
+    resp = requests.post(CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=120)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GLM请求失败 status={resp.status_code}, body={resp.text[:500]}")
+    data = resp.json()
+    if not isinstance(data, dict):
+        return {}
+    return _parse_json_from_response(_extract_chat_message_content(data))
 
 
 def _compress_base64_image(
@@ -115,26 +164,70 @@ def _parse_json_from_response(content: str) -> dict:
     return json.loads(json_str)
 
 
+def _find_layout_payload(data: dict):
+    candidates = [data]
+    for key in ("data", "result"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+
+    for candidate in candidates:
+        if any(key in candidate for key in LAYOUT_RESULT_KEYS):
+            return candidate
+    return None
+
+
+def _extract_chat_message_content(data: dict) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("GLM响应缺少choices")
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise ValueError("GLM响应choices格式异常")
+
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        raise ValueError("GLM响应缺少message")
+
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    raise ValueError(f"GLM响应message.content类型异常: {type(content).__name__}")
+
+
 def _extract_text_chunks(data: dict) -> list[str]:
     chunks: list[str] = []
 
-    md_results = data.get("md_results")
-    if isinstance(md_results, list):
-        for item in md_results:
-            if isinstance(item, str) and item.strip():
-                chunks.append(item.strip())
+    def append_text(value):
+        if isinstance(value, str):
+            for line in value.splitlines():
+                if line.strip():
+                    chunks.append(line.strip())
+            return
+        if isinstance(value, dict):
+            content = value.get("content")
+            if isinstance(content, str) and content.strip():
+                chunks.append(content.strip())
+            for nested_key in ("text", "md_results", "layout_details"):
+                nested = value.get(nested_key)
+                if nested is not None and nested is not content:
+                    append_text(nested)
+            return
+        if isinstance(value, list):
+            for item in value:
+                append_text(item)
 
-    layout_details = data.get("layout_details")
-    if isinstance(layout_details, list):
-        for page_items in layout_details:
-            if not isinstance(page_items, list):
-                continue
-            for item in page_items:
-                if not isinstance(item, dict):
-                    continue
-                content = item.get("content")
-                if isinstance(content, str) and content.strip():
-                    chunks.append(content.strip())
+    append_text(data.get("md_results"))
+    append_text(data.get("layout_details"))
 
     # 去重保序
     seen = set()
