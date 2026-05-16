@@ -4,6 +4,7 @@ import json
 import re
 import requests
 from PIL import Image
+from typing import List, Optional
 from config import EXTRACTION_MODEL, GLM_API_KEY, PRIMARY_MODEL
 
 try:
@@ -19,7 +20,7 @@ def call_llm(
     image_base64: str,
     prompt: str,
     model: str = PRIMARY_MODEL,
-    expected_fields: list[str] | None = None,
+    expected_fields: Optional[List[str]] = None,
 ) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
