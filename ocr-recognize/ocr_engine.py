@@ -3,8 +3,9 @@ import io
 import json
 import re
 import requests
+from typing import List, Optional
 from PIL import Image
-from config import GLM_API_KEY, PRIMARY_MODEL
+from config import EXTRACTION_MODEL, GLM_API_KEY, PRIMARY_MODEL
 
 try:
     _LANCZOS = Image.Resampling.LANCZOS  # Pillow>=9.1
@@ -12,22 +13,36 @@ except AttributeError:
     _LANCZOS = Image.LANCZOS  # Pillow<9.1
 
 
-def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
+def call_llm(
+    image_base64: str,
+    prompt: str,
+    model: str = PRIMARY_MODEL,
+    expected_fields: Optional[List[str]] = None,
+) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
     """
-    return _call_model(image_base64, prompt, model)
+    return _call_model(image_base64, prompt, model, expected_fields)
 
 
-def _call_model(image_base64: str, prompt: str, model: str) -> dict:
+def _call_model(
+    image_base64: str,
+    prompt: str,
+    model: str,
+    expected_fields: Optional[List[str]] = None,
+) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
-        return _call_glm(image_base64, prompt)
+        return _call_glm(image_base64, prompt, expected_fields)
     else:
         raise ValueError(f"不支持的模型: {model}")
 
 
-def _call_glm(image_base64: str, prompt: str) -> dict:
+def _call_glm(
+    image_base64: str,
+    prompt: str,
+    expected_fields: Optional[List[str]] = None,
+) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
         raise ValueError("缺少 GLM_API_KEY 环境变量")
@@ -48,20 +63,97 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
 
     resp = requests.post(url, headers=headers, json=payload, timeout=120)
     if resp.status_code >= 400:
-        raise RuntimeError(f"GLM请求失败 status={resp.status_code}, body={resp.text[:500]}")
+        raise RuntimeError(f"GLM OCR请求失败 status={resp.status_code}")
     data = resp.json()
     if not isinstance(data, dict):
         return {}
 
-    # 1) 优先尝试直接JSON结构（兼容不同返回形态）
-    if isinstance(data.get("data"), dict):
-        return data["data"]
-    if isinstance(data.get("result"), dict):
-        return data["result"]
+    # 1) 只有确认为业务字段 JSON 时才短路，避免把 layout 外壳当作最终结果。
+    direct_candidates = [data, data.get("data"), data.get("result")]
+    for candidate in direct_candidates:
+        if isinstance(candidate, dict) and _has_expected_field(candidate, expected_fields):
+            return candidate
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
+    # 2) 从 layout_parsing 结果中提取文本。
     text_chunks = _extract_text_chunks(data)
-    return _map_business_card_fields(text_chunks)
+    if _is_business_card_fields(expected_fields):
+        return _map_business_card_fields(text_chunks)
+    if not text_chunks:
+        return {}
+
+    # 3) layout_parsing 不消费业务 prompt，发票/自定义字段需二次结构化抽取。
+    return _extract_fields_from_text("\n".join(text_chunks), prompt)
+
+
+def _has_expected_field(result: dict, expected_fields: Optional[List[str]]) -> bool:
+    if not expected_fields:
+        return True
+    return any(field in result for field in expected_fields)
+
+
+def _is_business_card_fields(expected_fields: Optional[List[str]]) -> bool:
+    return set(expected_fields or []) == {"姓名", "公司", "职位", "手机", "座机", "邮箱", "地址"}
+
+
+def _extract_fields_from_text(ocr_text: str, prompt: str) -> dict:
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": EXTRACTION_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是严谨的信息抽取助手。只输出一个JSON对象，不要解释。",
+            },
+            {
+                "role": "user",
+                "content": f"{prompt}\n\n以下是OCR识别文本，请只依据这些文本抽取字段：\n{ocr_text}",
+            },
+        ],
+        "temperature": 0,
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GLM字段抽取请求失败 status={resp.status_code}")
+
+    content = _extract_chat_content(resp.json())
+    if not content:
+        return {}
+    return _parse_json_from_response(content)
+
+
+def _extract_chat_content(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return ""
+
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return ""
+
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(parts)
+    return ""
 
 
 def _compress_base64_image(
@@ -118,23 +210,32 @@ def _parse_json_from_response(content: str) -> dict:
 def _extract_text_chunks(data: dict) -> list[str]:
     chunks: list[str] = []
 
-    md_results = data.get("md_results")
-    if isinstance(md_results, list):
-        for item in md_results:
-            if isinstance(item, str) and item.strip():
-                chunks.append(item.strip())
+    def add_text(value: str):
+        text = value.strip()
+        if text:
+            chunks.append(text)
 
-    layout_details = data.get("layout_details")
-    if isinstance(layout_details, list):
-        for page_items in layout_details:
-            if not isinstance(page_items, list):
-                continue
-            for item in page_items:
-                if not isinstance(item, dict):
-                    continue
-                content = item.get("content")
-                if isinstance(content, str) and content.strip():
-                    chunks.append(content.strip())
+    def walk(value, key: str = ""):
+        if isinstance(value, str):
+            if key in {"md_results", "content", "text", "markdown"}:
+                add_text(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item, key)
+            return
+        if not isinstance(value, dict):
+            return
+
+        for text_key in ("md_results", "content", "text", "markdown"):
+            if text_key in value:
+                walk(value[text_key], text_key)
+
+        for nested_key in ("data", "result", "layout_details", "pages", "blocks", "items"):
+            if nested_key in value:
+                walk(value[nested_key], nested_key)
+
+    walk(data)
 
     # 去重保序
     seen = set()
