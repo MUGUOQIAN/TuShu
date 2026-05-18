@@ -4,7 +4,7 @@ import json
 import re
 import requests
 from PIL import Image
-from config import GLM_API_KEY, PRIMARY_MODEL
+from config import GLM_API_KEY, PRIMARY_MODEL, TEXT_MODEL
 
 try:
     _LANCZOS = Image.Resampling.LANCZOS  # Pillow>=9.1
@@ -12,22 +12,32 @@ except AttributeError:
     _LANCZOS = Image.LANCZOS  # Pillow<9.1
 
 
-def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
+def call_llm(
+    image_base64: str,
+    prompt: str,
+    model: str = PRIMARY_MODEL,
+    expected_fields: list[str] | None = None,
+) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
     """
-    return _call_model(image_base64, prompt, model)
+    return _call_model(image_base64, prompt, model, expected_fields or [])
 
 
-def _call_model(image_base64: str, prompt: str, model: str) -> dict:
+def _call_model(
+    image_base64: str,
+    prompt: str,
+    model: str,
+    expected_fields: list[str],
+) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
-        return _call_glm(image_base64, prompt)
+        return _call_glm(image_base64, prompt, expected_fields)
     else:
         raise ValueError(f"不支持的模型: {model}")
 
 
-def _call_glm(image_base64: str, prompt: str) -> dict:
+def _call_glm(image_base64: str, prompt: str, expected_fields: list[str]) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
         raise ValueError("缺少 GLM_API_KEY 环境变量")
@@ -53,15 +63,18 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
     if not isinstance(data, dict):
         return {}
 
-    # 1) 优先尝试直接JSON结构（兼容不同返回形态）
-    if isinstance(data.get("data"), dict):
-        return data["data"]
-    if isinstance(data.get("result"), dict):
-        return data["result"]
+    # 1) 只有响应对象真正包含期望业务字段时，才把它当成结构化结果。
+    direct_result = _find_structured_result(data, expected_fields)
+    if direct_result is not None:
+        return direct_result
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
+    # 2) 从 layout_parsing 结果中提取文本。名片保留本地启发式；其他模板需要二次结构化。
     text_chunks = _extract_text_chunks(data)
-    return _map_business_card_fields(text_chunks)
+    if not expected_fields or _is_business_card_fields(expected_fields):
+        return _map_business_card_fields(text_chunks)
+    if not text_chunks:
+        raise ValueError("GLM OCR未返回可用于字段抽取的文本")
+    return _extract_fields_from_text(text_chunks, prompt, expected_fields)
 
 
 def _compress_base64_image(
@@ -115,16 +128,124 @@ def _parse_json_from_response(content: str) -> dict:
     return json.loads(json_str)
 
 
+def _find_structured_result(data: dict, expected_fields: list[str]) -> dict | None:
+    if not expected_fields:
+        for key in ("data", "result"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                return value
+        return None
+
+    expected = set(expected_fields)
+    for candidate in _iter_result_candidates(data):
+        if expected.intersection(candidate.keys()):
+            return candidate
+    return None
+
+
+def _iter_result_candidates(value):
+    if not isinstance(value, dict):
+        return
+    yield value
+    for key in ("data", "result"):
+        child = value.get(key)
+        if isinstance(child, dict):
+            yield from _iter_result_candidates(child)
+
+
+def _is_business_card_fields(expected_fields: list[str]) -> bool:
+    return set(expected_fields) == {"姓名", "公司", "职位", "手机", "座机", "邮箱", "地址"}
+
+
+def _extract_fields_from_text(chunks: list[str], prompt: str, expected_fields: list[str]) -> dict:
+    if not GLM_API_KEY:
+        raise ValueError("缺少 GLM_API_KEY 环境变量")
+
+    text = "\n".join(chunks)
+    fields = ", ".join(expected_fields)
+    user_prompt = f"""{prompt.strip()}
+
+请只基于以下OCR文本抽取字段：{fields}。
+若某字段在文本中不存在，请输出空字符串。
+
+OCR文本：
+{text}"""
+    payload = {
+        "model": TEXT_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是严谨的信息抽取助手。只输出JSON对象，不要输出解释文字。",
+            },
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GLM结构化抽取失败 status={resp.status_code}, body={resp.text[:500]}")
+
+    data = resp.json()
+    content = _extract_chat_content(data)
+    result = _parse_json_from_response(content)
+    if not isinstance(result, dict):
+        raise ValueError(f"结构化抽取结果不是对象类型: {type(result).__name__}")
+    return result
+
+
+def _extract_chat_content(data: dict) -> str:
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("GLM结构化抽取响应缺少choices")
+
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise ValueError("GLM结构化抽取响应choices格式异常")
+
+    message = first.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message["content"]
+    if isinstance(first.get("content"), str):
+        return first["content"]
+    raise ValueError("GLM结构化抽取响应缺少content")
+
+
 def _extract_text_chunks(data: dict) -> list[str]:
     chunks: list[str] = []
 
-    md_results = data.get("md_results")
+    _collect_text_chunks(data, chunks)
+
+    # 去重保序
+    seen = set()
+    ordered = []
+    for c in chunks:
+        if c not in seen:
+            seen.add(c)
+            ordered.append(c)
+    return ordered
+
+
+def _collect_text_chunks(value, chunks: list[str]) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _collect_text_chunks(item, chunks)
+        return
+    if not isinstance(value, dict):
+        return
+
+    md_results = value.get("md_results")
     if isinstance(md_results, list):
         for item in md_results:
             if isinstance(item, str) and item.strip():
                 chunks.append(item.strip())
 
-    layout_details = data.get("layout_details")
+    layout_details = value.get("layout_details")
     if isinstance(layout_details, list):
         for page_items in layout_details:
             if not isinstance(page_items, list):
@@ -136,14 +257,15 @@ def _extract_text_chunks(data: dict) -> list[str]:
                 if isinstance(content, str) and content.strip():
                     chunks.append(content.strip())
 
-    # 去重保序
-    seen = set()
-    ordered = []
-    for c in chunks:
-        if c not in seen:
-            seen.add(c)
-            ordered.append(c)
-    return ordered
+    for key in ("content", "text"):
+        content = value.get(key)
+        if isinstance(content, str) and content.strip():
+            chunks.append(content.strip())
+
+    for key in ("data", "result"):
+        child = value.get(key)
+        if isinstance(child, (dict, list)):
+            _collect_text_chunks(child, chunks)
 
 
 def _map_business_card_fields(chunks: list[str]) -> dict:
