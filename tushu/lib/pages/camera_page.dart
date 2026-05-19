@@ -18,7 +18,7 @@ class CameraPage extends StatefulWidget {
 class _CameraPageState extends State<CameraPage> {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
-  TemplateType _selectedTemplate = TemplateType.custom;
+  TemplateType _selectedTemplate = TemplateType.businessCard;
   String _customFields = "";
   bool _isProcessing = false;
 
@@ -90,9 +90,13 @@ class _CameraPageState extends State<CameraPage> {
         );
       }
     } catch (e) {
-      _showError("识别失败，请重试");
+      if (mounted) {
+        _showError("识别失败，请重试");
+      }
     } finally {
-      setState(() => _isProcessing = false);
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
     }
   }
 
