@@ -15,5 +15,8 @@ GLM_API_KEY = os.environ.get("GLM_API_KEY", "")
 # 模型配置（仅GLM）
 PRIMARY_MODEL = os.environ.get("PRIMARY_MODEL", "glm-ocr")
 
+# layout_parsing 只负责识别版面文本，非名片字段需要再用文本模型结构化抽取
+EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "glm-4-flash")
+
 # 图片最大Base64长度（约2MB原图）
 MAX_IMAGE_SIZE = 2 * 1024 * 1024
