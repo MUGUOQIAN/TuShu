@@ -3,8 +3,9 @@ import io
 import json
 import re
 import requests
+from typing import Optional
 from PIL import Image
-from config import GLM_API_KEY, PRIMARY_MODEL
+from config import GLM_API_KEY, PRIMARY_MODEL, STRUCTURE_MODEL
 
 try:
     _LANCZOS = Image.Resampling.LANCZOS  # Pillow>=9.1
@@ -12,22 +13,39 @@ except AttributeError:
     _LANCZOS = Image.LANCZOS  # Pillow<9.1
 
 
-def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
+BUSINESS_CARD_FIELDS = ["姓名", "公司", "职位", "手机", "座机", "邮箱", "地址"]
+
+
+def call_llm(
+    image_base64: str,
+    prompt: str,
+    model: str = PRIMARY_MODEL,
+    expected_fields: Optional[list[str]] = None,
+) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
     """
-    return _call_model(image_base64, prompt, model)
+    return _call_model(image_base64, prompt, model, expected_fields)
 
 
-def _call_model(image_base64: str, prompt: str, model: str) -> dict:
+def _call_model(
+    image_base64: str,
+    prompt: str,
+    model: str,
+    expected_fields: Optional[list[str]] = None,
+) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
-        return _call_glm(image_base64, prompt)
+        return _call_glm(image_base64, prompt, expected_fields)
     else:
         raise ValueError(f"不支持的模型: {model}")
 
 
-def _call_glm(image_base64: str, prompt: str) -> dict:
+def _call_glm(
+    image_base64: str,
+    prompt: str,
+    expected_fields: Optional[list[str]] = None,
+) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
         raise ValueError("缺少 GLM_API_KEY 环境变量")
@@ -53,14 +71,17 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
     if not isinstance(data, dict):
         return {}
 
-    # 1) 优先尝试直接JSON结构（兼容不同返回形态）
-    if isinstance(data.get("data"), dict):
-        return data["data"]
-    if isinstance(data.get("result"), dict):
-        return data["result"]
+    # 1) 仅在返回确实包含业务字段时才作为结构化结果，避免把 layout 外壳误当业务 JSON。
+    direct_result = _extract_direct_result(data, expected_fields)
+    if direct_result is not None:
+        return direct_result
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
+    # 2) 从 layout_parsing 结果中提取文本。名片走稳定的本地规则，其他模板再结构化抽取。
     text_chunks = _extract_text_chunks(data)
+    if _should_use_business_card_mapping(expected_fields):
+        return _map_business_card_fields(text_chunks)
+    if expected_fields:
+        return _extract_structured_fields(text_chunks, prompt, expected_fields)
     return _map_business_card_fields(text_chunks)
 
 
@@ -115,6 +136,80 @@ def _parse_json_from_response(content: str) -> dict:
     return json.loads(json_str)
 
 
+def _extract_direct_result(data: dict, expected_fields: Optional[list[str]]) -> Optional[dict]:
+    candidates = []
+    if isinstance(data.get("data"), dict):
+        candidates.append(data["data"])
+    if isinstance(data.get("result"), dict):
+        candidates.append(data["result"])
+
+    if not expected_fields:
+        return candidates[0] if candidates else None
+
+    for candidate in candidates:
+        if _has_expected_field(candidate, expected_fields):
+            return candidate
+        nested_data = candidate.get("data")
+        if isinstance(nested_data, dict) and _has_expected_field(nested_data, expected_fields):
+            return nested_data
+        nested_result = candidate.get("result")
+        if isinstance(nested_result, dict) and _has_expected_field(nested_result, expected_fields):
+            return nested_result
+    return None
+
+
+def _has_expected_field(candidate: dict, expected_fields: list[str]) -> bool:
+    return any(field in candidate for field in expected_fields)
+
+
+def _should_use_business_card_mapping(expected_fields: Optional[list[str]]) -> bool:
+    if not expected_fields:
+        return True
+    return set(expected_fields) == set(BUSINESS_CARD_FIELDS)
+
+
+def _extract_structured_fields(chunks: list[str], prompt: str, expected_fields: list[str]) -> dict:
+    text = "\n".join(chunks).strip()
+    if not text:
+        return {field: "" for field in expected_fields}
+
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    user_prompt = (
+        f"{prompt.strip()}\n\n"
+        "以下是 OCR layout_parsing 识别出的原始文本，请只基于这些文本抽取字段。\n"
+        f"字段列表：{', '.join(expected_fields)}\n\n"
+        f"OCR文本：\n{text}\n\n"
+        "仅返回一个 JSON 对象，不要包含解释文字。"
+    )
+    payload = {
+        "model": STRUCTURE_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是严谨的信息抽取助手，只输出 JSON 对象。"},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GLM结构化抽取失败 status={resp.status_code}, body={resp.text[:500]}")
+
+    data = resp.json()
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise ValueError("GLM结构化抽取返回格式异常") from e
+    parsed = _parse_json_from_response(content)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"GLM结构化抽取JSON不是对象类型: {type(parsed).__name__}")
+    return parsed
+
+
 def _extract_text_chunks(data: dict) -> list[str]:
     chunks: list[str] = []
 
@@ -123,6 +218,8 @@ def _extract_text_chunks(data: dict) -> list[str]:
         for item in md_results:
             if isinstance(item, str) and item.strip():
                 chunks.append(item.strip())
+    elif isinstance(md_results, str) and md_results.strip():
+        chunks.append(md_results.strip())
 
     layout_details = data.get("layout_details")
     if isinstance(layout_details, list):
