@@ -3,6 +3,7 @@ import io
 import json
 import re
 import requests
+from typing import Optional
 from PIL import Image
 from config import GLM_API_KEY, PRIMARY_MODEL, STRUCTURE_MODEL
 
@@ -16,7 +17,7 @@ def call_llm(
     image_base64: str,
     prompt: str,
     model: str = PRIMARY_MODEL,
-    expected_fields: list[str] | None = None,
+    expected_fields: Optional[list[str]] = None,
 ) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
@@ -28,7 +29,7 @@ def _call_model(
     image_base64: str,
     prompt: str,
     model: str,
-    expected_fields: list[str] | None = None,
+    expected_fields: Optional[list[str]] = None,
 ) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
@@ -40,7 +41,7 @@ def _call_model(
 def _call_glm(
     image_base64: str,
     prompt: str,
-    expected_fields: list[str] | None = None,
+    expected_fields: Optional[list[str]] = None,
 ) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
@@ -149,7 +150,7 @@ def _result_candidates(data: dict) -> list[dict]:
 
 def _contains_expected_fields(
     candidate: dict,
-    expected_fields: list[str] | None,
+    expected_fields: Optional[list[str]],
 ) -> bool:
     if not expected_fields:
         return False
@@ -170,7 +171,7 @@ def _extract_text_chunks_from_candidates(data: dict) -> list[str]:
     return ordered
 
 
-def _is_business_card_fields(expected_fields: list[str] | None) -> bool:
+def _is_business_card_fields(expected_fields: Optional[list[str]]) -> bool:
     return set(expected_fields or []) == {"姓名", "公司", "职位", "手机", "座机", "邮箱", "地址"}
 
 
