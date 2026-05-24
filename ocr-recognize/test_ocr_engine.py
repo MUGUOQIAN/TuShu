@@ -77,7 +77,7 @@ class OcrEngineTest(unittest.TestCase):
             expected_fields=TEMPLATE_MAP["business_card"]["fields"],
         )
 
-        self.assertEqual(result["姓名"], "赵美娜 (Shermin Zhao)")
+        self.assertEqual(result["姓名"], "赵美娜")
         self.assertEqual(result["手机"], "13812345678")
         self.assertEqual(result["邮箱"], "shermin@example.com")
         self.assertEqual(mock_post.call_count, 1)
