@@ -11,6 +11,8 @@ import 'result_page.dart';
 class CameraPage extends StatefulWidget {
   const CameraPage({super.key});
 
+  static const TemplateType defaultTemplate = TemplateType.businessCard;
+
   @override
   State<CameraPage> createState() => _CameraPageState();
 }
@@ -18,7 +20,7 @@ class CameraPage extends StatefulWidget {
 class _CameraPageState extends State<CameraPage> {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
-  TemplateType _selectedTemplate = TemplateType.custom;
+  TemplateType _selectedTemplate = CameraPage.defaultTemplate;
   String _customFields = "";
   bool _isProcessing = false;
 
@@ -62,6 +64,11 @@ class _CameraPageState extends State<CameraPage> {
 
   /// 处理图片：压缩→调API→跳转结果页
   Future<void> _processImage(File imageFile) async {
+    if (_selectedTemplate == TemplateType.custom && _customFields.trim().isEmpty) {
+      _showError("请先输入自定义字段");
+      return;
+    }
+
     setState(() => _isProcessing = true);
 
     try {
