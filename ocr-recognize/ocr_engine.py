@@ -210,13 +210,13 @@ def _collect_text_chunks(data: dict, chunks: list[str]) -> None:
     if isinstance(md_results, list):
         for item in md_results:
             if isinstance(item, str) and item.strip():
-                chunks.append(item.strip())
+                _append_text_chunk(chunks, item)
             elif isinstance(item, dict):
                 content = item.get("content") or item.get("text")
                 if isinstance(content, str) and content.strip():
-                    chunks.append(content.strip())
+                    _append_text_chunk(chunks, content)
     elif isinstance(md_results, str) and md_results.strip():
-        chunks.append(md_results.strip())
+        _append_text_chunk(chunks, md_results)
 
     layout_details = data.get("layout_details")
     if isinstance(layout_details, list):
@@ -228,12 +228,19 @@ def _collect_text_chunks(data: dict, chunks: list[str]) -> None:
                     continue
                 content = item.get("content")
                 if isinstance(content, str) and content.strip():
-                    chunks.append(content.strip())
+                    _append_text_chunk(chunks, content)
 
     for key in ("data", "result"):
         nested = data.get(key)
         if isinstance(nested, dict):
             _collect_text_chunks(nested, chunks)
+
+
+def _append_text_chunk(chunks: list[str], text: str) -> None:
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            chunks.append(line)
 
 
 def _map_business_card_fields(chunks: list[str]) -> dict:
