@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import re
+from typing import Optional
 import requests
 from PIL import Image
 from config import GLM_API_KEY, PRIMARY_MODEL, TEXT_MODEL
@@ -16,7 +17,7 @@ def call_llm(
     image_base64: str,
     prompt: str,
     model: str = PRIMARY_MODEL,
-    expected_fields: list[str] | None = None,
+    expected_fields: Optional[list[str]] = None,
     template_type: str = "business_card",
 ) -> dict:
     """
@@ -29,7 +30,7 @@ def _call_model(
     image_base64: str,
     prompt: str,
     model: str,
-    expected_fields: list[str] | None,
+    expected_fields: Optional[list[str]],
     template_type: str,
 ) -> dict:
     """实际调用模型API"""
@@ -42,7 +43,7 @@ def _call_model(
 def _call_glm(
     image_base64: str,
     prompt: str,
-    expected_fields: list[str] | None = None,
+    expected_fields: Optional[list[str]] = None,
     template_type: str = "business_card",
 ) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
@@ -139,8 +140,8 @@ def _parse_json_from_response(content: str) -> dict:
 
 def _find_expected_field_payload(
     data: dict,
-    expected_fields: list[str] | None,
-) -> dict | None:
+    expected_fields: Optional[list[str]],
+) -> Optional[dict]:
     if not expected_fields:
         return None
 
