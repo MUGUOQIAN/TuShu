@@ -215,7 +215,9 @@ def _extract_text_chunks(data: dict) -> list[str]:
 
     def append_text(value):
         if isinstance(value, str) and value.strip():
-            chunks.append(value.strip())
+            for line in value.splitlines():
+                if line.strip():
+                    chunks.append(line.strip())
 
     def visit(node):
         if isinstance(node, dict):
