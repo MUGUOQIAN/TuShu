@@ -20,7 +20,7 @@ class ExcelService {
     sheet.appendRow(data.values.toList());
 
     // 保存文件
-    final fileName = _getFileName(templateType);
+    final fileName = await _getUniqueFileName(templateType);
     return await _saveExcel(excel, fileName);
   }
 
@@ -80,6 +80,27 @@ class ExcelService {
       case TemplateType.custom:
         return "识别结果_$dateStr.xlsx";
     }
+  }
+
+  /// 生成不会覆盖现有文件的新建导出文件名。
+  static Future<String> _getUniqueFileName(TemplateType type) async {
+    final baseFileName = _getFileName(type);
+    final dir = await getApplicationDocumentsDirectory();
+    var candidate = baseFileName;
+    var counter = 1;
+
+    while (await File('${dir.path}/$candidate').exists()) {
+      final dotIndex = baseFileName.lastIndexOf('.');
+      if (dotIndex == -1) {
+        candidate = '${baseFileName}_$counter';
+      } else {
+        candidate =
+            '${baseFileName.substring(0, dotIndex)}_$counter${baseFileName.substring(dotIndex)}';
+      }
+      counter++;
+    }
+
+    return candidate;
   }
 
   /// 分享文件
