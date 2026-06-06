@@ -19,6 +19,8 @@ class ApiService {
   /// 实际请求地址（与编译期 `OCR_API_BASE_URL` 或默认生产地址一致）。
   static String get ocrBaseUrl => _baseUrl;
 
+  static const Duration defaultRequestTimeout = Duration(seconds: 150);
+
   static final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 60),
     sendTimeout: const Duration(seconds: 120),
@@ -31,7 +33,7 @@ class ApiService {
     required String imageBase64,
     required TemplateType templateType,
     required String customFields,
-    Duration requestTimeout = const Duration(seconds: 45),
+    Duration requestTimeout = defaultRequestTimeout,
     Duration? sendTimeout,
     Duration? connectTimeout,
     Duration? receiveTimeout,
