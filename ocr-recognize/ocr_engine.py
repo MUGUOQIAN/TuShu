@@ -178,10 +178,6 @@ def _compress_base64_image(
     image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
 ) -> str:
     image_bytes = base64.b64decode(image_base64)
-    # 输入已较小则不再二次压缩，避免姓名等细节文字丢失。
-    if len(image_bytes) <= 300 * 1024:
-        return image_base64
-
     with Image.open(io.BytesIO(image_bytes)) as img:
         img = img.convert("RGB")
         width, height = img.size
