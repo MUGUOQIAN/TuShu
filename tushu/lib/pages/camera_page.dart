@@ -18,7 +18,7 @@ class CameraPage extends StatefulWidget {
 class _CameraPageState extends State<CameraPage> {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
-  TemplateType _selectedTemplate = TemplateType.custom;
+  TemplateType _selectedTemplate = TemplateType.businessCard;
   String _customFields = "";
   bool _isProcessing = false;
 
@@ -62,6 +62,11 @@ class _CameraPageState extends State<CameraPage> {
 
   /// 处理图片：压缩→调API→跳转结果页
   Future<void> _processImage(File imageFile) async {
+    if (_selectedTemplate == TemplateType.custom && _customFields.trim().isEmpty) {
+      _showError("请先填写自定义字段");
+      return;
+    }
+
     setState(() => _isProcessing = true);
 
     try {
