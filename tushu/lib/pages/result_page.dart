@@ -125,21 +125,27 @@ class _ResultPageState extends State<ResultPage> {
         );
       }
 
-     if (filePath != null && mounted) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text("已保存到: $filePath"),
-      action: SnackBarAction(
-        label: "分享",
-        onPressed: () {
-          // filePath 这里一定不为 null，但编译器不知道
-          // 直接用非空断言
-          ExcelService.shareFile(filePath!);
-        },
-      ),
-    ),
-  );
-}
+      if (!mounted) {
+        return;
+      }
+      if (filePath == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("导出失败: 无法保存Excel文件")),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("已保存到: $filePath"),
+          action: SnackBarAction(
+            label: "分享",
+            onPressed: () {
+              ExcelService.shareFile(filePath!);
+            },
+          ),
+        ),
+      );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("导出失败: $e")),
