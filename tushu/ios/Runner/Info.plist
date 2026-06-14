@@ -28,6 +28,10 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄需要 OCR 识别的图片</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于选择需要 OCR 识别的图片</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
