@@ -31,7 +31,7 @@ class ApiService {
     required String imageBase64,
     required TemplateType templateType,
     required String customFields,
-    Duration requestTimeout = const Duration(seconds: 45),
+    Duration requestTimeout = const Duration(seconds: 120),
     Duration? sendTimeout,
     Duration? connectTimeout,
     Duration? receiveTimeout,
@@ -66,16 +66,21 @@ class ApiService {
           .timeout(requestTimeout);
       print('[ApiService] recognize response <- status=${response.statusCode}, elapsedMs=${stopwatch.elapsedMilliseconds}');
 
-      if (response.statusCode == 200 && response.data["success"] == true) {
+      final responseData = response.data;
+      if (response.statusCode == 200 && responseData is Map && responseData["success"] == true) {
         // 将JSON map转为 String map
-        final Map<String, dynamic> data = response.data["data"];
-        return data.map((key, value) => MapEntry(key, value.toString()));
+        final data = responseData["data"];
+        if (data is! Map) {
+          throw Exception("识别结果格式异常");
+        }
+        return data.map((key, value) => MapEntry(key.toString(), value?.toString() ?? ""));
       } else {
-        final responseDataPreview = response.data is String
-            ? _preview(response.data as String)
-            : _preview(jsonEncode(response.data));
+        final responseDataPreview = responseData is String
+            ? _preview(responseData)
+            : _preview(jsonEncode(responseData));
         print('[ApiService] recognize failed payload <- $responseDataPreview');
-        throw Exception(response.data["error"] ?? "识别失败");
+        final error = responseData is Map ? responseData["error"] : null;
+        throw Exception(error ?? "识别失败");
       }
     } on TimeoutException catch (e) {
       print('[ApiService] recognize timeout after ${stopwatch.elapsedMilliseconds}ms: $e');

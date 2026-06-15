@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tushu/services/API_service.dart';
+import 'package:tushu/services/api_service.dart';
 import 'package:tushu/models/template.dart';
 
 void main() {
