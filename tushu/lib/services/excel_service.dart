@@ -21,7 +21,7 @@ class ExcelService {
 
     // 保存文件
     final fileName = _getFileName(templateType);
-    return await _saveExcel(excel, fileName);
+    return await _saveExcel(excel, fileName, overwrite: false);
   }
 
   /// 追加到已有Excel文件
@@ -45,27 +45,58 @@ class ExcelService {
 
     final sheet = excel['Sheet1'];
 
-    // 如果Sheet为空，先写表头
-    if (sheet.maxCols == 0) {
-      sheet.appendRow(data.keys.toList());
+    var headers = _readHeaderRow(sheet);
+    if (headers.isEmpty) {
+      headers = data.keys.toList();
+      sheet.appendRow(headers);
+    } else {
+      final incompatibleKeys = data.keys.where((key) => !headers.contains(key)).toList();
+      if (incompatibleKeys.isNotEmpty) {
+        throw Exception("Excel表头不兼容: ${incompatibleKeys.join(', ')}");
+      }
     }
 
-    // 追加数据行
-    sheet.appendRow(data.values.toList());
+    // 按既有表头顺序追加，避免字段顺序变化造成列错位。
+    sheet.appendRow(headers.map((key) => data[key] ?? "").toList());
 
     return await _saveExcel(excel, fileName);
   }
 
   /// 保存Excel到本地
-  static Future<String?> _saveExcel(Excel excel, String fileName) async {
+  static Future<String?> _saveExcel(Excel excel, String fileName, {bool overwrite = true}) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/$fileName');
+      final filePath = overwrite ? '${dir.path}/$fileName' : await _uniqueFilePath(dir, fileName);
+      final file = File(filePath);
       await file.writeAsBytes(excel.encode()!);
       return file.path;
     } catch (e) {
       return null;
     }
+  }
+
+  static List<String> _readHeaderRow(Sheet sheet) {
+    if (sheet.rows.isEmpty) {
+      return [];
+    }
+    return sheet.rows.first
+        .map((cell) => cell?.value?.toString().trim() ?? "")
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
+  static Future<String> _uniqueFilePath(Directory dir, String fileName) async {
+    final dotIndex = fileName.lastIndexOf('.');
+    final baseName = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+    final extension = dotIndex == -1 ? "" : fileName.substring(dotIndex);
+
+    var candidate = File('${dir.path}/$fileName');
+    var suffix = 1;
+    while (await candidate.exists()) {
+      candidate = File('${dir.path}/${baseName}_$suffix$extension');
+      suffix += 1;
+    }
+    return candidate.path;
   }
 
   /// 生成文件名

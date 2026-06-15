@@ -1,5 +1,6 @@
 import json
 import traceback
+from config import MAX_IMAGE_SIZE
 from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
@@ -74,12 +75,18 @@ def handler(event, context):
 
         if not image_base64:
             return _response(400, {"success": False, "error": "缺少图片数据"})
+        if not isinstance(image_base64, str):
+            return _response(400, {"success": False, "error": "图片数据格式错误"})
+        if len(image_base64) > MAX_IMAGE_SIZE:
+            return _response(400, {"success": False, "error": "图片过大，请压缩后重试"})
 
         # 2. 获取模板
         if template_type == "custom":
             if not custom_fields:
                 return _response(400, {"success": False, "error": "自定义模板需提供custom_fields"})
             fields = [f.strip() for f in custom_fields.split(",") if f.strip()]
+            if not fields:
+                return _response(400, {"success": False, "error": "自定义模板需提供有效字段"})
             prompt = TEMPLATE_MAP["custom"]["template"].format(
                 fields=", ".join(fields)
             )
@@ -92,7 +99,12 @@ def handler(event, context):
 
         # 3. 调用大模型
         print("[handler] call_llm start")
-        raw_result = call_llm(image_base64, prompt)
+        raw_result = call_llm(
+            image_base64,
+            prompt,
+            expected_fields=fields,
+            template_type=template_type,
+        )
         print(f"[handler] call_llm done raw_result_type={type(raw_result).__name__}")
         normalized_result = _normalize_llm_result(raw_result)
 
