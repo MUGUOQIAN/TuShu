@@ -3,6 +3,7 @@ import io
 import json
 import re
 import requests
+from typing import Optional
 from PIL import Image
 from config import GLM_API_KEY, PRIMARY_MODEL, STRUCTURE_MODEL
 
@@ -16,7 +17,7 @@ def call_llm(
     image_base64: str,
     prompt: str,
     model: str = PRIMARY_MODEL,
-    expected_fields: list[str] | None = None,
+    expected_fields: Optional[list[str]] = None,
     template_type: str = "business_card",
 ) -> dict:
     """

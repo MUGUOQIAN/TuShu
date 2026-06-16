@@ -164,6 +164,23 @@ class IndexHandlerTest(unittest.TestCase):
         body = json.loads(response["body"])
         self.assertIn("有效字段", body["error"])
 
+    @patch("index.call_llm")
+    def test_handler_rejects_oversized_image_before_ocr_decode(self, call_llm):
+        response = index.handler(
+            {
+                "body": json.dumps(
+                    {
+                        "image_base64": "a" * (index.MAX_IMAGE_SIZE + 1),
+                        "template_type": "business_card",
+                    }
+                )
+            },
+            None,
+        )
+
+        self.assertEqual(response["statusCode"], 413)
+        call_llm.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

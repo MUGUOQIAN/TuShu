@@ -1,5 +1,6 @@
 import json
 import traceback
+from config import MAX_IMAGE_SIZE
 from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
@@ -72,8 +73,10 @@ def handler(event, context):
             f"[handler] request parsed template_type={template_type}, image_base64_len={len(image_base64) if isinstance(image_base64, str) else -1}"
         )
 
-        if not image_base64:
+        if not isinstance(image_base64, str) or not image_base64:
             return _response(400, {"success": False, "error": "缺少图片数据"})
+        if len(image_base64) > MAX_IMAGE_SIZE:
+            return _response(413, {"success": False, "error": "图片数据过大"})
 
         # 2. 获取模板
         if template_type == "custom":
