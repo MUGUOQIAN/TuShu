@@ -292,6 +292,8 @@ def _extract_text_chunks(data: dict) -> list[str]:
             if isinstance(value, (str, list, dict)):
                 visit(value)
 
+    visit(data)
+
     # 去重保序
     seen = set()
     ordered = []
