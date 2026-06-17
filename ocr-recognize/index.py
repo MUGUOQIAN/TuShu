@@ -1,10 +1,10 @@
 import json
 import traceback
-from ocr_engine import call_llm
+from ocr_engine import InvalidImageError, call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
 
-SERVICE_VERSION = "ocr-recognize-2026-04-30-v5"
+SERVICE_VERSION = "ocr-recognize-2026-06-17-v6"
 
 
 def _normalize_fc_event(event):
@@ -66,7 +66,7 @@ def handler(event, context):
         else:
             body = json.loads(raw)
         image_base64 = body.get("image_base64", "")
-        template_type = body.get("template_type", "custom")
+        template_type = body.get("template_type", "business_card")
         custom_fields = body.get("custom_fields", "")
         print(
             f"[handler] request parsed template_type={template_type}, image_base64_len={len(image_base64) if isinstance(image_base64, str) else -1}"
@@ -80,6 +80,8 @@ def handler(event, context):
             if not custom_fields:
                 return _response(400, {"success": False, "error": "自定义模板需提供custom_fields"})
             fields = [f.strip() for f in custom_fields.split(",") if f.strip()]
+            if not fields:
+                return _response(400, {"success": False, "error": "自定义模板字段不能为空"})
             prompt = TEMPLATE_MAP["custom"]["template"].format(
                 fields=", ".join(fields)
             )
@@ -92,12 +94,19 @@ def handler(event, context):
 
         # 3. 调用大模型
         print("[handler] call_llm start")
-        raw_result = call_llm(image_base64, prompt)
+        raw_result = call_llm(
+            image_base64,
+            prompt,
+            expected_fields=fields,
+            template_type=template_type,
+        )
         print(f"[handler] call_llm done raw_result_type={type(raw_result).__name__}")
         normalized_result = _normalize_llm_result(raw_result)
 
         # 4. 校验清洗
         cleaned_result = validate_and_clean(normalized_result, fields)
+        if not any(str(value).strip() for value in cleaned_result.values()):
+            return _response(422, {"success": False, "error": "OCR未提取到有效字段"})
         print("[handler] success")
 
         return _response(200, {"success": True, "data": cleaned_result})
@@ -106,6 +115,9 @@ def handler(event, context):
         print(f"[handler] json decode error: {e}")
         print(traceback.format_exc())
         return _response(400, {"success": False, "error": f"大模型返回格式异常: {str(e)}"})
+    except InvalidImageError as e:
+        print(f"[handler] invalid image: {e}")
+        return _response(400, {"success": False, "error": str(e)})
     except Exception as e:
         print(f"[handler] unhandled exception: {e}")
         print(traceback.format_exc())
