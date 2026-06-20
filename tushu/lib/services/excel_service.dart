@@ -21,7 +21,8 @@ class ExcelService {
 
     // 保存文件
     final fileName = _getFileName(templateType);
-    return await _saveExcel(excel, fileName);
+    final uniqueFileName = await _getUniqueFileName(fileName);
+    return await _saveExcel(excel, uniqueFileName);
   }
 
   /// 追加到已有Excel文件
@@ -46,14 +47,30 @@ class ExcelService {
     final sheet = excel['Sheet1'];
 
     // 如果Sheet为空，先写表头
-    if (sheet.maxCols == 0) {
+    final header = _readHeader(sheet);
+    if (header.isEmpty) {
       sheet.appendRow(data.keys.toList());
+      sheet.appendRow(data.values.toList());
+    } else {
+      final extraFields = data.keys.where((key) => !header.contains(key)).toList();
+      if (extraFields.isNotEmpty) {
+        throw Exception("追加字段与已有Excel不一致: ${extraFields.join(', ')}");
+      }
+      final row = header.map((key) => data[key] ?? "").toList();
+      sheet.appendRow(row);
     }
 
-    // 追加数据行
-    sheet.appendRow(data.values.toList());
-
     return await _saveExcel(excel, fileName);
+  }
+
+  static List<String> _readHeader(Sheet sheet) {
+    if (sheet.maxRows == 0 || sheet.rows.isEmpty) {
+      return [];
+    }
+    return sheet.rows.first
+        .map((cell) => cell?.value?.toString().trim() ?? "")
+        .where((value) => value.isNotEmpty)
+        .toList();
   }
 
   /// 保存Excel到本地
@@ -66,6 +83,21 @@ class ExcelService {
     } catch (e) {
       return null;
     }
+  }
+
+  static Future<String> _getUniqueFileName(String fileName) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final dotIndex = fileName.lastIndexOf(".");
+    final baseName = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+    final ext = dotIndex == -1 ? "" : fileName.substring(dotIndex);
+
+    var candidate = fileName;
+    var counter = 1;
+    while (await File('${dir.path}/$candidate').exists()) {
+      candidate = "${baseName}_$counter$ext";
+      counter += 1;
+    }
+    return candidate;
   }
 
   /// 生成文件名

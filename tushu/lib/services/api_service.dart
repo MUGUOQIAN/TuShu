@@ -5,6 +5,8 @@ import '../models/template.dart';
 
 /// OCR 云函数（默认 [ocrBaseUrl] 为已部署的生产地址；本地可覆盖）。
 class ApiService {
+  static const Duration defaultRequestTimeout = Duration(seconds: 180);
+
   /// 生产环境：与 `ocr-recognize` 部署的 HTTP 触发器根 URL 一致。
   static const String _defaultBaseUrl =
       "https://ocr-recognize-tkvdnxbzyt.cn-shanghai.fcapp.run";
@@ -31,7 +33,7 @@ class ApiService {
     required String imageBase64,
     required TemplateType templateType,
     required String customFields,
-    Duration requestTimeout = const Duration(seconds: 45),
+    Duration requestTimeout = defaultRequestTimeout,
     Duration? sendTimeout,
     Duration? connectTimeout,
     Duration? receiveTimeout,
