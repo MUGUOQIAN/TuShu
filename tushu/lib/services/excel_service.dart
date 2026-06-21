@@ -19,9 +19,8 @@ class ExcelService {
     // 写入数据行
     sheet.appendRow(data.values.toList());
 
-    // 保存文件
     final fileName = _getFileName(templateType);
-    return await _saveExcel(excel, fileName);
+    return await _saveExcel(excel, fileName, overwrite: false);
   }
 
   /// 追加到已有Excel文件
@@ -45,26 +44,66 @@ class ExcelService {
 
     final sheet = excel['Sheet1'];
 
-    // 如果Sheet为空，先写表头
-    if (sheet.maxCols == 0) {
-      sheet.appendRow(data.keys.toList());
+    final headers = _headersFromSheet(sheet);
+    if (headers.isEmpty) {
+      final newHeaders = data.keys.toList();
+      sheet.appendRow(newHeaders);
+      sheet.appendRow(newHeaders.map((field) => data[field] ?? "").toList());
+    } else {
+      final headerSet = headers.toSet();
+      final dataSet = data.keys.toSet();
+      if (headerSet.length != dataSet.length || !headerSet.containsAll(dataSet)) {
+        throw StateError("已有Excel表头与当前字段不一致，请关闭追加模式新建文件");
+      }
+      sheet.appendRow(headers.map((field) => data[field] ?? "").toList());
     }
-
-    // 追加数据行
-    sheet.appendRow(data.values.toList());
 
     return await _saveExcel(excel, fileName);
   }
 
   /// 保存Excel到本地
-  static Future<String?> _saveExcel(Excel excel, String fileName) async {
+  static Future<String?> _saveExcel(
+    Excel excel,
+    String fileName, {
+    bool overwrite = true,
+  }) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/$fileName');
+      final targetName = overwrite ? fileName : await _availableFileName(dir, fileName);
+      final file = File('${dir.path}/$targetName');
       await file.writeAsBytes(excel.encode()!);
       return file.path;
     } catch (e) {
       return null;
+    }
+  }
+
+  static List<String> _headersFromSheet(Sheet sheet) {
+    if (sheet.maxRows == 0 || sheet.rows.isEmpty) {
+      return [];
+    }
+    return sheet.rows.first
+        .map((cell) => cell?.value?.toString().trim() ?? "")
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
+  static Future<String> _availableFileName(Directory dir, String fileName) async {
+    final file = File('${dir.path}/$fileName');
+    if (!await file.exists()) {
+      return fileName;
+    }
+
+    final dotIndex = fileName.lastIndexOf(".");
+    final name = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+    final extension = dotIndex == -1 ? "" : fileName.substring(dotIndex);
+    var suffix = 1;
+    while (true) {
+      final candidate = "${name}_$suffix$extension";
+      if (!await File('${dir.path}/$candidate').exists()) {
+        return candidate;
+      }
+      suffix++;
     }
   }
 
