@@ -20,8 +20,9 @@ class ExcelService {
     sheet.appendRow(data.values.toList());
 
     // 保存文件
-    final fileName = _getFileName(templateType);
-    return await _saveExcel(excel, fileName);
+    final dir = await getApplicationDocumentsDirectory();
+    final fileName = await _getAvailableFileName(dir, _getFileName(templateType));
+    return await _saveExcel(excel, fileName, directory: dir);
   }
 
   /// 追加到已有Excel文件
@@ -45,21 +46,32 @@ class ExcelService {
 
     final sheet = excel['Sheet1'];
 
+    final headers = data.keys.toList();
+
     // 如果Sheet为空，先写表头
     if (sheet.maxCols == 0) {
-      sheet.appendRow(data.keys.toList());
+      sheet.appendRow(headers);
+    } else {
+      final existingHeaders = _readHeader(sheet);
+      if (!_sameHeaders(existingHeaders, headers)) {
+        throw StateError("已有Excel表头与当前字段不一致，请新建导出");
+      }
     }
 
     // 追加数据行
-    sheet.appendRow(data.values.toList());
+    sheet.appendRow(headers.map((header) => data[header] ?? "").toList());
 
     return await _saveExcel(excel, fileName);
   }
 
   /// 保存Excel到本地
-  static Future<String?> _saveExcel(Excel excel, String fileName) async {
+  static Future<String?> _saveExcel(
+    Excel excel,
+    String fileName, {
+    Directory? directory,
+  }) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
+      final dir = directory ?? await getApplicationDocumentsDirectory();
       final file = File('${dir.path}/$fileName');
       await file.writeAsBytes(excel.encode()!);
       return file.path;
@@ -80,6 +92,47 @@ class ExcelService {
       case TemplateType.custom:
         return "识别结果_$dateStr.xlsx";
     }
+  }
+
+  static Future<String> _getAvailableFileName(Directory dir, String fileName) async {
+    final original = File('${dir.path}/$fileName');
+    if (!await original.exists()) {
+      return fileName;
+    }
+
+    final dotIndex = fileName.lastIndexOf('.');
+    final baseName = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+    final extension = dotIndex == -1 ? '' : fileName.substring(dotIndex);
+    var index = 1;
+    while (true) {
+      final candidate = '${baseName}_$index$extension';
+      if (!await File('${dir.path}/$candidate').exists()) {
+        return candidate;
+      }
+      index++;
+    }
+  }
+
+  static List<String> _readHeader(Sheet sheet) {
+    if (sheet.rows.isEmpty) {
+      return [];
+    }
+    return sheet.rows.first
+        .map((cell) => cell?.value?.toString().trim() ?? "")
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
+  static bool _sameHeaders(List<String> left, List<String> right) {
+    if (left.length != right.length) {
+      return false;
+    }
+    for (var i = 0; i < left.length; i++) {
+      if (left[i] != right[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// 分享文件
