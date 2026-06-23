@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/api_service.dart';
 import '../widgets/template_selector.dart';
 import '../models/template.dart';
@@ -18,7 +19,7 @@ class CameraPage extends StatefulWidget {
 class _CameraPageState extends State<CameraPage> {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
-  TemplateType _selectedTemplate = TemplateType.custom;
+  TemplateType _selectedTemplate = TemplateType.businessCard;
   String _customFields = "";
   bool _isProcessing = false;
 
@@ -29,11 +30,23 @@ class _CameraPageState extends State<CameraPage> {
   }
 
   Future<void> _initCamera() async {
-    _cameras = await availableCameras();
-    if (_cameras.isNotEmpty) {
-      _controller = CameraController(_cameras[0], ResolutionPreset.medium);
-      await _controller!.initialize();
-      setState(() {});
+    try {
+      final status = await Permission.camera.request();
+      if (!status.isGranted) {
+        _showError("需要相机权限才能拍照识别");
+        return;
+      }
+
+      _cameras = await availableCameras();
+      if (_cameras.isNotEmpty) {
+        _controller = CameraController(_cameras[0], ResolutionPreset.medium);
+        await _controller!.initialize();
+        if (mounted) {
+          setState(() {});
+        }
+      }
+    } catch (e) {
+      _showError("相机初始化失败: $e");
     }
   }
 
@@ -42,7 +55,7 @@ class _CameraPageState extends State<CameraPage> {
     if (_controller == null || _isProcessing) return;
     try {
       final XFile photo = await _controller!.takePicture();
-      _processImage(File(photo.path));
+      await _processImage(File(photo.path));
     } catch (e) {
       _showError("拍照失败: $e");
     }
@@ -56,12 +69,17 @@ class _CameraPageState extends State<CameraPage> {
       imageQuality: 80, // 预压缩
     );
     if (image != null) {
-      _processImage(File(image.path));
+      await _processImage(File(image.path));
     }
   }
 
   /// 处理图片：压缩→调API→跳转结果页
   Future<void> _processImage(File imageFile) async {
+    if (_selectedTemplate == TemplateType.custom && _customFields.trim().isEmpty) {
+      _showError("请先输入自定义字段");
+      return;
+    }
+
     setState(() => _isProcessing = true);
 
     try {
@@ -92,11 +110,14 @@ class _CameraPageState extends State<CameraPage> {
     } catch (e) {
       _showError("识别失败，请重试");
     } finally {
-      setState(() => _isProcessing = false);
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
     }
   }
 
   void _showError(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
