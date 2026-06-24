@@ -31,7 +31,7 @@ class ApiService {
     required String imageBase64,
     required TemplateType templateType,
     required String customFields,
-    Duration requestTimeout = const Duration(seconds: 45),
+    Duration requestTimeout = const Duration(minutes: 3),
     Duration? sendTimeout,
     Duration? connectTimeout,
     Duration? receiveTimeout,
