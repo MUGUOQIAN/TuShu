@@ -20,7 +20,7 @@ class ExcelService {
     sheet.appendRow(data.values.toList());
 
     // 保存文件
-    final fileName = _getFileName(templateType);
+    final fileName = await _getAvailableFileName(templateType);
     return await _saveExcel(excel, fileName);
   }
 
@@ -46,12 +46,19 @@ class ExcelService {
     final sheet = excel['Sheet1'];
 
     // 如果Sheet为空，先写表头
-    if (sheet.maxCols == 0) {
-      sheet.appendRow(data.keys.toList());
+    final headers = _readHeader(sheet);
+    if (headers.isEmpty) {
+      final newHeaders = data.keys.toList();
+      sheet.appendRow(newHeaders);
+      sheet.appendRow(newHeaders.map((key) => data[key] ?? '').toList());
+    } else {
+      final existing = headers.toSet();
+      final incoming = data.keys.toSet();
+      if (existing.length != headers.length || existing.length != incoming.length || !existing.containsAll(incoming)) {
+        throw Exception('字段与已有Excel不一致，无法追加');
+      }
+      sheet.appendRow(headers.map((key) => data[key] ?? '').toList());
     }
-
-    // 追加数据行
-    sheet.appendRow(data.values.toList());
 
     return await _saveExcel(excel, fileName);
   }
@@ -80,6 +87,32 @@ class ExcelService {
       case TemplateType.custom:
         return "识别结果_$dateStr.xlsx";
     }
+  }
+
+  static Future<String> _getAvailableFileName(TemplateType type) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final baseName = _getFileName(type);
+    final dotIndex = baseName.lastIndexOf('.');
+    final name = dotIndex == -1 ? baseName : baseName.substring(0, dotIndex);
+    final extension = dotIndex == -1 ? '' : baseName.substring(dotIndex);
+
+    var candidate = baseName;
+    var counter = 1;
+    while (await File('${dir.path}/$candidate').exists()) {
+      candidate = '${name}_$counter$extension';
+      counter += 1;
+    }
+    return candidate;
+  }
+
+  static List<String> _readHeader(Sheet sheet) {
+    if (sheet.maxRows == 0 || sheet.rows.isEmpty) {
+      return const [];
+    }
+    return sheet.rows.first
+        .map((cell) => cell?.value?.toString().trim() ?? '')
+        .where((value) => value.isNotEmpty)
+        .toList();
   }
 
   /// 分享文件

@@ -24,6 +24,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄名片、发票或其他文档并进行OCR识别。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择图片并进行OCR识别。</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

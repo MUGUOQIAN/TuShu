@@ -1,10 +1,14 @@
+import base64
+import binascii
 import json
+import re
 import traceback
+from config import MAX_IMAGE_SIZE
 from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
 
-SERVICE_VERSION = "ocr-recognize-2026-04-30-v5"
+SERVICE_VERSION = "ocr-recognize-2026-06-25-v6"
 
 
 def _normalize_fc_event(event):
@@ -74,12 +78,17 @@ def handler(event, context):
 
         if not image_base64:
             return _response(400, {"success": False, "error": "缺少图片数据"})
+        image_error = _validate_image_base64(image_base64)
+        if image_error:
+            return _response(400, {"success": False, "error": image_error})
 
         # 2. 获取模板
         if template_type == "custom":
             if not custom_fields:
                 return _response(400, {"success": False, "error": "自定义模板需提供custom_fields"})
             fields = [f.strip() for f in custom_fields.split(",") if f.strip()]
+            if not fields:
+                return _response(400, {"success": False, "error": "自定义模板需提供custom_fields"})
             prompt = TEMPLATE_MAP["custom"]["template"].format(
                 fields=", ".join(fields)
             )
@@ -92,12 +101,19 @@ def handler(event, context):
 
         # 3. 调用大模型
         print("[handler] call_llm start")
-        raw_result = call_llm(image_base64, prompt)
+        raw_result = call_llm(
+            image_base64,
+            prompt,
+            expected_fields=fields,
+            template_type=template_type,
+        )
         print(f"[handler] call_llm done raw_result_type={type(raw_result).__name__}")
         normalized_result = _normalize_llm_result(raw_result)
 
         # 4. 校验清洗
         cleaned_result = validate_and_clean(normalized_result, fields)
+        if not any(value for value in cleaned_result.values()):
+            return _response(422, {"success": False, "error": "未识别到有效字段"})
         print("[handler] success")
 
         return _response(200, {"success": True, "data": cleaned_result})
@@ -122,6 +138,32 @@ def _response(status_code: int, body: dict) -> dict:
         },
         "body": json.dumps(body, ensure_ascii=False)
     }
+
+
+def _validate_image_base64(image_base64) -> str:
+    if not isinstance(image_base64, str):
+        return "图片数据格式无效"
+
+    payload = image_base64.strip()
+    match = re.match(r"^data:image/[A-Za-z0-9.+-]+;base64,(.*)$", payload, re.DOTALL)
+    if match:
+        payload = match.group(1)
+    payload = re.sub(r"\s+", "", payload)
+    if not payload:
+        return "缺少图片数据"
+
+    max_base64_len = ((MAX_IMAGE_SIZE + 2) // 3) * 4
+    if len(payload) > max_base64_len:
+        return f"图片超过大小限制({MAX_IMAGE_SIZE // 1024 // 1024}MB)"
+
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return "图片Base64格式无效"
+
+    if len(decoded) > MAX_IMAGE_SIZE:
+        return f"图片超过大小限制({MAX_IMAGE_SIZE // 1024 // 1024}MB)"
+    return ""
 
 
 def _normalize_llm_result(raw_result) -> dict:
