@@ -1,8 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tushu/services/API_service.dart';
+import 'package:tushu/services/api_service.dart';
 import 'package:tushu/models/template.dart';
 
 void main() {
+  test('API recognize default timeout allows cloud OCR latency', () {
+    expect(ApiService.defaultRequestTimeout, const Duration(seconds: 180));
+  });
+
   test('API recognize returns error for invalid image', () async {
     try {
       final result = await ApiService.recognize(
