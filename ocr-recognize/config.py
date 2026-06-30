@@ -12,8 +12,9 @@ if load_dotenv is not None:
 # 从云函数环境变量读取，保护密钥安全
 GLM_API_KEY = os.environ.get("GLM_API_KEY", "")
 
-# 模型配置（仅GLM）
+# 模型配置（OCR + 文本结构化）
 PRIMARY_MODEL = os.environ.get("PRIMARY_MODEL", "glm-ocr")
+STRUCTURE_MODEL = os.environ.get("STRUCTURE_MODEL", "glm-4-flash")
 
 # 图片最大Base64长度（约2MB原图）
 MAX_IMAGE_SIZE = 2 * 1024 * 1024
