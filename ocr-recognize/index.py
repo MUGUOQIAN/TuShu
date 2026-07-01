@@ -4,7 +4,7 @@ from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
 
-SERVICE_VERSION = "ocr-recognize-2026-04-30-v5"
+SERVICE_VERSION = "ocr-recognize-2026-04-30-v6"
 
 
 def _normalize_fc_event(event):
@@ -92,12 +92,19 @@ def handler(event, context):
 
         # 3. 调用大模型
         print("[handler] call_llm start")
-        raw_result = call_llm(image_base64, prompt)
+        raw_result = call_llm(
+            image_base64,
+            prompt,
+            expected_fields=fields,
+            template_type=template_type,
+        )
         print(f"[handler] call_llm done raw_result_type={type(raw_result).__name__}")
         normalized_result = _normalize_llm_result(raw_result)
 
         # 4. 校验清洗
         cleaned_result = validate_and_clean(normalized_result, fields)
+        if _all_fields_empty(cleaned_result):
+            return _response(422, {"success": False, "error": "未识别到有效字段，请确认图片和模板是否匹配"})
         print("[handler] success")
 
         return _response(200, {"success": True, "data": cleaned_result})
@@ -160,3 +167,7 @@ def _normalize_llm_result(raw_result) -> dict:
         return parsed
 
     raise ValueError(f"模型返回类型不受支持: {type(raw_result).__name__}")
+
+
+def _all_fields_empty(result: dict) -> bool:
+    return all(not str(value).strip() for value in result.values())
