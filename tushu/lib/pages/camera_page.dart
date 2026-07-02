@@ -18,7 +18,7 @@ class CameraPage extends StatefulWidget {
 class _CameraPageState extends State<CameraPage> {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
-  TemplateType _selectedTemplate = TemplateType.custom;
+  TemplateType _selectedTemplate = TemplateType.businessCard;
   String _customFields = "";
   bool _isProcessing = false;
 
@@ -29,11 +29,17 @@ class _CameraPageState extends State<CameraPage> {
   }
 
   Future<void> _initCamera() async {
-    _cameras = await availableCameras();
-    if (_cameras.isNotEmpty) {
-      _controller = CameraController(_cameras[0], ResolutionPreset.medium);
-      await _controller!.initialize();
-      setState(() {});
+    try {
+      _cameras = await availableCameras();
+      if (_cameras.isNotEmpty) {
+        _controller = CameraController(_cameras[0], ResolutionPreset.medium);
+        await _controller!.initialize();
+        if (mounted) {
+          setState(() {});
+        }
+      }
+    } catch (e) {
+      _showError("相机初始化失败: $e");
     }
   }
 
@@ -50,18 +56,28 @@ class _CameraPageState extends State<CameraPage> {
 
   /// 从相册选择
   Future<void> _pickFromGallery() async {
-    final picker = ImagePicker();
-    final XFile? image = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 80, // 预压缩
-    );
-    if (image != null) {
-      _processImage(File(image.path));
+    try {
+      final picker = ImagePicker();
+      final XFile? image = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80, // 预压缩
+        maxWidth: 1280,
+        maxHeight: 1280,
+      );
+      if (image != null) {
+        _processImage(File(image.path));
+      }
+    } catch (e) {
+      _showError("选择图片失败: $e");
     }
   }
 
   /// 处理图片：压缩→调API→跳转结果页
   Future<void> _processImage(File imageFile) async {
+    if (_selectedTemplate == TemplateType.custom && _customFields.trim().isEmpty) {
+      _showError("请先填写自定义字段");
+      return;
+    }
     setState(() => _isProcessing = true);
 
     try {
@@ -92,11 +108,14 @@ class _CameraPageState extends State<CameraPage> {
     } catch (e) {
       _showError("识别失败，请重试");
     } finally {
-      setState(() => _isProcessing = false);
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
     }
   }
 
   void _showError(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 

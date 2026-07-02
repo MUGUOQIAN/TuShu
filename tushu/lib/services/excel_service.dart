@@ -20,7 +20,7 @@ class ExcelService {
     sheet.appendRow(data.values.toList());
 
     // 保存文件
-    final fileName = _getFileName(templateType);
+    final fileName = await _getAvailableFileName(_getFileName(templateType));
     return await _saveExcel(excel, fileName);
   }
 
@@ -45,13 +45,21 @@ class ExcelService {
 
     final sheet = excel['Sheet1'];
 
-    // 如果Sheet为空，先写表头
-    if (sheet.maxCols == 0) {
-      sheet.appendRow(data.keys.toList());
+    // 如果Sheet为空，先写表头；否则按既有表头对齐，避免自定义字段变更后写错列。
+    var headers = _sheetHeaders(sheet);
+    if (headers.isEmpty) {
+      headers = data.keys.toList();
+      sheet.appendRow(headers);
+    } else {
+      final existing = headers.toSet();
+      final incoming = data.keys.toSet();
+      if (existing.length != incoming.length || !existing.containsAll(incoming)) {
+        throw StateError("当前字段与已有Excel表头不一致，无法安全追加");
+      }
     }
 
     // 追加数据行
-    sheet.appendRow(data.values.toList());
+    sheet.appendRow(headers.map((field) => data[field] ?? "").toList());
 
     return await _saveExcel(excel, fileName);
   }
@@ -65,6 +73,36 @@ class ExcelService {
       return file.path;
     } catch (e) {
       return null;
+    }
+  }
+
+  static List<String> _sheetHeaders(Sheet sheet) {
+    if (sheet.maxRows == 0 || sheet.rows.isEmpty) {
+      return [];
+    }
+    return sheet.rows.first
+        .map((cell) => cell?.value?.toString().trim() ?? "")
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
+  static Future<String> _getAvailableFileName(String baseFileName) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final firstFile = File('${dir.path}/$baseFileName');
+    if (!await firstFile.exists()) {
+      return baseFileName;
+    }
+
+    final dotIndex = baseFileName.lastIndexOf('.');
+    final name = dotIndex == -1 ? baseFileName : baseFileName.substring(0, dotIndex);
+    final ext = dotIndex == -1 ? "" : baseFileName.substring(dotIndex);
+    var index = 1;
+    while (true) {
+      final candidate = "${name}_$index$ext";
+      if (!await File('${dir.path}/$candidate').exists()) {
+        return candidate;
+      }
+      index += 1;
     }
   }
 
