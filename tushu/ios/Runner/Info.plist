@@ -25,9 +25,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>用于拍摄待识别的票据、名片或其他文档。</string>
+	<string>Used to capture receipts, business cards, and other documents for OCR.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>用于从相册选择待识别的图片。</string>
+	<string>Used to choose images from the photo library for OCR.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
