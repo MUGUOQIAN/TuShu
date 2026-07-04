@@ -22,7 +22,7 @@ class ApiService {
   static final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 60),
     sendTimeout: const Duration(seconds: 120),
-    receiveTimeout: const Duration(seconds: 120),
+    receiveTimeout: const Duration(seconds: 180),
     headers: {'Content-Type': 'application/json; charset=utf-8'},
   ));
 
@@ -31,7 +31,7 @@ class ApiService {
     required String imageBase64,
     required TemplateType templateType,
     required String customFields,
-    Duration requestTimeout = const Duration(seconds: 45),
+    Duration requestTimeout = const Duration(seconds: 180),
     Duration? sendTimeout,
     Duration? connectTimeout,
     Duration? receiveTimeout,
