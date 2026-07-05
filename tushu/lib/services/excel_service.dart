@@ -21,7 +21,7 @@ class ExcelService {
 
     // 保存文件
     final fileName = _getFileName(templateType);
-    return await _saveExcel(excel, fileName);
+    return await _saveExcel(excel, fileName, overwrite: false);
   }
 
   /// 追加到已有Excel文件
@@ -57,14 +57,40 @@ class ExcelService {
   }
 
   /// 保存Excel到本地
-  static Future<String?> _saveExcel(Excel excel, String fileName) async {
+  static Future<String?> _saveExcel(
+    Excel excel,
+    String fileName, {
+    bool overwrite = true,
+  }) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/$fileName');
+      final file = overwrite
+          ? File('${dir.path}/$fileName')
+          : await _nextAvailableFile(dir, fileName);
       await file.writeAsBytes(excel.encode()!);
       return file.path;
     } catch (e) {
       return null;
+    }
+  }
+
+  static Future<File> _nextAvailableFile(Directory dir, String fileName) async {
+    var file = File('${dir.path}/$fileName');
+    if (!await file.exists()) {
+      return file;
+    }
+
+    final dotIndex = fileName.lastIndexOf('.');
+    final baseName = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+    final extension = dotIndex == -1 ? '' : fileName.substring(dotIndex);
+
+    var counter = 1;
+    while (true) {
+      file = File('${dir.path}/${baseName}_$counter$extension');
+      if (!await file.exists()) {
+        return file;
+      }
+      counter += 1;
     }
   }
 
