@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄需要 OCR 识别的图片。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择需要 OCR 识别的图片。</string>
 </dict>
 </plist>

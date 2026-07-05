@@ -26,12 +26,14 @@ class ApiService {
     headers: {'Content-Type': 'application/json; charset=utf-8'},
   ));
 
+  static const Duration defaultRequestTimeout = Duration(seconds: 180);
+
   /// 调用后端OCR识别
   static Future<Map<String, String>> recognize({
     required String imageBase64,
     required TemplateType templateType,
     required String customFields,
-    Duration requestTimeout = const Duration(seconds: 45),
+    Duration requestTimeout = defaultRequestTimeout,
     Duration? sendTimeout,
     Duration? connectTimeout,
     Duration? receiveTimeout,
