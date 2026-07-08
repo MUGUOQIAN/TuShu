@@ -19,8 +19,8 @@ class ExcelService {
     // 写入数据行
     sheet.appendRow(data.values.toList());
 
-    // 保存文件
-    final fileName = _getFileName(templateType);
+    // 新建导出不能覆盖同日已有文件，否则会静默丢失上一次导出的数据。
+    final fileName = await _getUniqueFileName(_getFileName(templateType));
     return await _saveExcel(excel, fileName);
   }
 
@@ -66,6 +66,21 @@ class ExcelService {
     } catch (e) {
       return null;
     }
+  }
+
+  static Future<String> _getUniqueFileName(String fileName) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final dotIndex = fileName.lastIndexOf('.');
+    final baseName = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+    final extension = dotIndex == -1 ? '' : fileName.substring(dotIndex);
+
+    var candidate = fileName;
+    var suffix = 1;
+    while (await File('${dir.path}/$candidate').exists()) {
+      candidate = '${baseName}_$suffix$extension';
+      suffix += 1;
+    }
+    return candidate;
   }
 
   /// 生成文件名
