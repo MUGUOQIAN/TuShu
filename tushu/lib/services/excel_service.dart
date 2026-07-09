@@ -21,7 +21,8 @@ class ExcelService {
 
     // 保存文件
     final fileName = _getFileName(templateType);
-    return await _saveExcel(excel, fileName);
+    final uniqueFileName = await _getAvailableFileName(fileName);
+    return await _saveExcel(excel, uniqueFileName);
   }
 
   /// 追加到已有Excel文件
@@ -66,6 +67,28 @@ class ExcelService {
     } catch (e) {
       return null;
     }
+  }
+
+  /// 避免“新建”导出覆盖当天同模板已有文件。
+  static Future<String> _getAvailableFileName(String fileName) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final initial = File('${dir.path}/$fileName');
+    if (!await initial.exists()) {
+      return fileName;
+    }
+
+    final dotIndex = fileName.lastIndexOf('.');
+    final stem = dotIndex == -1 ? fileName : fileName.substring(0, dotIndex);
+    final extension = dotIndex == -1 ? '' : fileName.substring(dotIndex);
+    var index = 1;
+    while (index < 1000) {
+      final candidate = '${stem}_${index}${extension}';
+      if (!await File('${dir.path}/$candidate').exists()) {
+        return candidate;
+      }
+      index += 1;
+    }
+    throw StateError("可用导出文件名已耗尽: $fileName");
   }
 
   /// 生成文件名
