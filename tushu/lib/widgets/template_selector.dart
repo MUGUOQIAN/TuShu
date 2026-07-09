@@ -85,7 +85,14 @@ class TemplateSelector extends StatelessWidget {
           ),
           TextButton(
             onPressed: () {
-              onTemplateChanged(TemplateType.custom, controller.text);
+              final fields = controller.text.trim();
+              if (fields.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("请填写至少一个自定义字段")),
+                );
+                return;
+              }
+              onTemplateChanged(TemplateType.custom, fields);
               Navigator.pop(ctx);
             },
             child: const Text("确定"),
