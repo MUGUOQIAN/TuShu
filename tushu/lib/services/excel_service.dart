@@ -19,8 +19,8 @@ class ExcelService {
     // 写入数据行
     sheet.appendRow(data.values.toList());
 
-    // 保存文件
-    final fileName = _getFileName(templateType);
+    // 新建导出不能覆盖同一天已经保存的文件。
+    final fileName = await _getUniqueFileName(templateType);
     return await _saveExcel(excel, fileName);
   }
 
@@ -48,12 +48,34 @@ class ExcelService {
     // 如果Sheet为空，先写表头
     if (sheet.maxCols == 0) {
       sheet.appendRow(data.keys.toList());
+      sheet.appendRow(data.values.toList());
+      return await _saveExcel(excel, fileName);
     }
 
-    // 追加数据行
-    sheet.appendRow(data.values.toList());
+    final headers = _readHeaderRow(sheet);
+    final newFields = data.keys.where((key) => !headers.contains(key)).toList();
+    if (newFields.isNotEmpty) {
+      throw StateError("当前文件缺少字段: ${newFields.join(', ')}，请新建文件导出");
+    }
+
+    // 按已有表头顺序写入，避免自定义字段变化时列错位。
+    sheet.appendRow(headers.map((key) => data[key] ?? "").toList());
 
     return await _saveExcel(excel, fileName);
+  }
+
+  static List<String> _readHeaderRow(Sheet sheet) {
+    final headers = <String>[];
+    for (var col = 0; col < sheet.maxCols; col++) {
+      final value = sheet
+          .cell(CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0))
+          .value;
+      final text = value?.toString().trim() ?? "";
+      if (text.isNotEmpty) {
+        headers.add(text);
+      }
+    }
+    return headers;
   }
 
   /// 保存Excel到本地
@@ -66,6 +88,22 @@ class ExcelService {
     } catch (e) {
       return null;
     }
+  }
+
+  static Future<String> _getUniqueFileName(TemplateType type) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final baseName = _getFileName(type);
+    final dotIndex = baseName.lastIndexOf('.');
+    final name = dotIndex == -1 ? baseName : baseName.substring(0, dotIndex);
+    final ext = dotIndex == -1 ? "" : baseName.substring(dotIndex);
+
+    var candidate = baseName;
+    var counter = 1;
+    while (await File('${dir.path}/$candidate').exists()) {
+      candidate = "${name}_$counter$ext";
+      counter++;
+    }
+    return candidate;
   }
 
   /// 生成文件名

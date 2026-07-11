@@ -1,10 +1,12 @@
+import base64
 import json
 import traceback
+from config import MAX_IMAGE_SIZE
 from ocr_engine import call_llm
 from prompt_templates import TEMPLATE_MAP
 from validators import validate_and_clean
 
-SERVICE_VERSION = "ocr-recognize-2026-04-30-v5"
+SERVICE_VERSION = "ocr-recognize-2026-04-30-v6"
 
 
 def _normalize_fc_event(event):
@@ -32,6 +34,8 @@ def _normalize_fc_event(event):
     raw_body = event.get("body", "{}")
     if isinstance(raw_body, (bytes, bytearray)):
         raw_body = raw_body.decode("utf-8", errors="replace")
+    if event.get("isBase64Encoded") is True and isinstance(raw_body, str):
+        raw_body = base64.b64decode(raw_body).decode("utf-8", errors="replace")
     if raw_body is None or (isinstance(raw_body, str) and not raw_body.strip()):
         raw_body = "{}"
 
@@ -74,6 +78,11 @@ def handler(event, context):
 
         if not image_base64:
             return _response(400, {"success": False, "error": "缺少图片数据"})
+        if not isinstance(image_base64, str):
+            return _response(400, {"success": False, "error": "图片数据格式错误"})
+        image_base64 = _strip_data_uri(image_base64)
+        if len(image_base64) > MAX_IMAGE_SIZE:
+            return _response(413, {"success": False, "error": "图片过大，请压缩后重试"})
 
         # 2. 获取模板
         if template_type == "custom":
@@ -92,12 +101,19 @@ def handler(event, context):
 
         # 3. 调用大模型
         print("[handler] call_llm start")
-        raw_result = call_llm(image_base64, prompt)
+        raw_result = call_llm(
+            image_base64,
+            prompt,
+            expected_fields=fields,
+            template_type=template_type,
+        )
         print(f"[handler] call_llm done raw_result_type={type(raw_result).__name__}")
         normalized_result = _normalize_llm_result(raw_result)
 
         # 4. 校验清洗
         cleaned_result = validate_and_clean(normalized_result, fields)
+        if not any(str(value).strip() for value in cleaned_result.values()):
+            return _response(422, {"success": False, "error": "未识别到有效字段，请检查图片或模板"})
         print("[handler] success")
 
         return _response(200, {"success": True, "data": cleaned_result})
@@ -160,3 +176,9 @@ def _normalize_llm_result(raw_result) -> dict:
         return parsed
 
     raise ValueError(f"模型返回类型不受支持: {type(raw_result).__name__}")
+
+
+def _strip_data_uri(image_base64: str) -> str:
+    if image_base64.startswith("data:") and "," in image_base64:
+        return image_base64.split(",", 1)[1]
+    return image_base64
