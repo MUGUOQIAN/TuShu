@@ -22,6 +22,12 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄需要 OCR 识别的图片</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于选择需要 OCR 识别的图片</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于保存和分享识别导出的文件</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
