@@ -4,7 +4,7 @@ import json
 import re
 import requests
 from PIL import Image
-from config import GLM_API_KEY, PRIMARY_MODEL
+from config import GLM_API_KEY, PRIMARY_MODEL, STRUCTURE_MODEL
 
 try:
     _LANCZOS = Image.Resampling.LANCZOS  # Pillow>=9.1
@@ -12,22 +12,39 @@ except AttributeError:
     _LANCZOS = Image.LANCZOS  # Pillow<9.1
 
 
-def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
+def call_llm(
+    image_base64: str,
+    prompt: str,
+    model: str = PRIMARY_MODEL,
+    expected_fields: list[str] | None = None,
+    template_type: str = "business_card",
+) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
     """
-    return _call_model(image_base64, prompt, model)
+    return _call_model(image_base64, prompt, model, expected_fields or [], template_type)
 
 
-def _call_model(image_base64: str, prompt: str, model: str) -> dict:
+def _call_model(
+    image_base64: str,
+    prompt: str,
+    model: str,
+    expected_fields: list[str],
+    template_type: str,
+) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
-        return _call_glm(image_base64, prompt)
+        return _call_glm(image_base64, prompt, expected_fields, template_type)
     else:
         raise ValueError(f"不支持的模型: {model}")
 
 
-def _call_glm(image_base64: str, prompt: str) -> dict:
+def _call_glm(
+    image_base64: str,
+    prompt: str,
+    expected_fields: list[str],
+    template_type: str,
+) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
         raise ValueError("缺少 GLM_API_KEY 环境变量")
@@ -37,9 +54,8 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
         "Authorization": f"Bearer {GLM_API_KEY}",
         "Content-Type": "application/json"
     }
-    # GLM-OCR 要求 file 使用 URL 或 data URI；先压缩可显著降低上传超时概率。
-    compressed_base64 = _compress_base64_image(image_base64)
-    file_data_uri = f"data:image/jpeg;base64,{compressed_base64}"
+    # GLM-OCR 要求 file 使用 URL 或 data URI；先规范化图片可降低上传超时概率。
+    file_data_uri = _prepare_image_data_uri(image_base64)
     payload = {
         "model": "glm-ocr",
         "file": file_data_uri,
@@ -53,29 +69,35 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
     if not isinstance(data, dict):
         return {}
 
-    # 1) 优先尝试直接JSON结构（兼容不同返回形态）
-    if isinstance(data.get("data"), dict):
-        return data["data"]
-    if isinstance(data.get("result"), dict):
-        return data["result"]
+    # 1) 仅当返回中确实包含业务字段时，才把 dict 当结构化结果。
+    direct = _find_business_result(data, expected_fields)
+    if direct:
+        return direct
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
+    # 2) 从 layout_parsing 结果中提取 OCR 文本。
     text_chunks = _extract_text_chunks(data)
-    return _map_business_card_fields(text_chunks)
+    if template_type == "business_card":
+        return _map_business_card_fields(text_chunks)
+
+    # 3) layout_parsing 不消费业务 prompt；发票/自定义需对 OCR 文本再做结构化。
+    return _structure_fields_from_text(text_chunks, prompt, expected_fields)
 
 
-def _compress_base64_image(
+def _prepare_image_data_uri(
     image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
 ) -> str:
-    image_bytes = base64.b64decode(image_base64)
-    # 输入已较小则不再二次压缩，避免姓名等细节文字丢失。
-    if len(image_bytes) <= 300 * 1024:
-        return image_base64
+    image_bytes = base64.b64decode(_strip_data_uri_prefix(image_base64), validate=True)
 
     with Image.open(io.BytesIO(image_bytes)) as img:
-        img = img.convert("RGB")
+        original_format = (img.format or "JPEG").upper()
         width, height = img.size
         long_edge = max(width, height)
+
+        # 小且尺寸合适的图片保留原始编码，避免把 PNG/WebP 冒充 JPEG。
+        if len(image_bytes) <= 300 * 1024 and long_edge <= max_edge:
+            return f"data:{_image_mime(original_format)};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+
+        img = img.convert("RGB")
         if long_edge > max_edge:
             scale = max_edge / long_edge
             new_size = (int(width * scale), int(height * scale))
@@ -87,10 +109,28 @@ def _compress_base64_image(
             img.save(output, format="JPEG", quality=quality, optimize=True)
             result = output.getvalue()
             if len(result) <= max_bytes or quality == 35:
-                return base64.b64encode(result).decode("utf-8")
+                encoded = base64.b64encode(result).decode("utf-8")
+                return f"data:image/jpeg;base64,{encoded}"
             quality -= 10
 
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def _strip_data_uri_prefix(image_base64: str) -> str:
+    if "," in image_base64 and image_base64.lstrip().startswith("data:"):
+        return image_base64.split(",", 1)[1]
     return image_base64
+
+
+def _image_mime(image_format: str) -> str:
+    format_to_mime = {
+        "JPEG": "image/jpeg",
+        "JPG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+    }
+    return format_to_mime.get(image_format, "image/jpeg")
 
 
 def _parse_json_from_response(content: str) -> dict:
@@ -118,23 +158,34 @@ def _parse_json_from_response(content: str) -> dict:
 def _extract_text_chunks(data: dict) -> list[str]:
     chunks: list[str] = []
 
-    md_results = data.get("md_results")
-    if isinstance(md_results, list):
-        for item in md_results:
-            if isinstance(item, str) and item.strip():
-                chunks.append(item.strip())
+    def visit(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "md_results":
+                    _collect_md_results(child)
+                elif key == "content" and isinstance(child, str) and child.strip():
+                    chunks.append(child.strip())
+                else:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
 
-    layout_details = data.get("layout_details")
-    if isinstance(layout_details, list):
-        for page_items in layout_details:
-            if not isinstance(page_items, list):
-                continue
-            for item in page_items:
-                if not isinstance(item, dict):
-                    continue
-                content = item.get("content")
-                if isinstance(content, str) and content.strip():
-                    chunks.append(content.strip())
+    def _collect_md_results(value):
+        if isinstance(value, str):
+            for line in value.splitlines():
+                if line.strip():
+                    chunks.append(line.strip())
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    for line in item.splitlines():
+                        if line.strip():
+                            chunks.append(line.strip())
+                else:
+                    visit(item)
+
+    visit(data)
 
     # 去重保序
     seen = set()
@@ -144,6 +195,78 @@ def _extract_text_chunks(data: dict) -> list[str]:
             seen.add(c)
             ordered.append(c)
     return ordered
+
+
+def _find_business_result(data: dict, expected_fields: list[str]) -> dict:
+    if not expected_fields:
+        return {}
+
+    def visit(value):
+        if isinstance(value, dict):
+            if any(field in value for field in expected_fields):
+                return value
+            for child in value.values():
+                found = visit(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = visit(child)
+                if found:
+                    return found
+        return {}
+
+    return visit(data)
+
+
+def _structure_fields_from_text(
+    text_chunks: list[str], prompt: str, expected_fields: list[str]
+) -> dict:
+    text = "\n".join(text_chunks).strip()
+    if not text or not expected_fields:
+        return {}
+
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": STRUCTURE_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是一个OCR文本信息抽取器。必须只输出JSON对象，不要输出解释。",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"{prompt}\n\n"
+                    "下面是 OCR 识别出的原始文本，请仅基于这些文本抽取字段：\n"
+                    f"{text}"
+                ),
+            },
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GLM结构化请求失败 status={resp.status_code}, body={resp.text[:500]}")
+
+    data = resp.json()
+    content = ""
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if isinstance(choices, list) and choices:
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if isinstance(message, dict):
+            content = message.get("content") or ""
+    if not isinstance(content, str) or not content.strip():
+        return {}
+
+    parsed = _parse_json_from_response(content)
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _map_business_card_fields(chunks: list[str]) -> dict:

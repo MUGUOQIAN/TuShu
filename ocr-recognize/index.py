@@ -1,3 +1,4 @@
+import base64
 import json
 import traceback
 from ocr_engine import call_llm
@@ -74,6 +75,10 @@ def handler(event, context):
 
         if not image_base64:
             return _response(400, {"success": False, "error": "缺少图片数据"})
+        if not isinstance(image_base64, str):
+            return _response(400, {"success": False, "error": "图片数据格式错误"})
+        if not _is_valid_base64_image(image_base64):
+            return _response(400, {"success": False, "error": "图片数据不是有效的Base64"})
 
         # 2. 获取模板
         if template_type == "custom":
@@ -92,12 +97,19 @@ def handler(event, context):
 
         # 3. 调用大模型
         print("[handler] call_llm start")
-        raw_result = call_llm(image_base64, prompt)
+        raw_result = call_llm(
+            image_base64,
+            prompt,
+            expected_fields=fields,
+            template_type=template_type,
+        )
         print(f"[handler] call_llm done raw_result_type={type(raw_result).__name__}")
         normalized_result = _normalize_llm_result(raw_result)
 
         # 4. 校验清洗
         cleaned_result = validate_and_clean(normalized_result, fields)
+        if not _has_any_value(cleaned_result):
+            return _response(422, {"success": False, "error": "未识别到有效字段，请重新拍摄或更换模板"})
         print("[handler] success")
 
         return _response(200, {"success": True, "data": cleaned_result})
@@ -160,3 +172,16 @@ def _normalize_llm_result(raw_result) -> dict:
         return parsed
 
     raise ValueError(f"模型返回类型不受支持: {type(raw_result).__name__}")
+
+
+def _is_valid_base64_image(image_base64: str) -> bool:
+    payload = image_base64.split(",", 1)[1] if image_base64.lstrip().startswith("data:") and "," in image_base64 else image_base64
+    try:
+        base64.b64decode(payload, validate=True)
+    except Exception:
+        return False
+    return True
+
+
+def _has_any_value(result: dict) -> bool:
+    return any(str(value).strip() for value in result.values())
