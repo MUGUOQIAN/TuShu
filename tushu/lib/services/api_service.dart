@@ -22,7 +22,9 @@ class ApiService {
   static final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 60),
     sendTimeout: const Duration(seconds: 120),
-    receiveTimeout: const Duration(seconds: 120),
+    // 发票/自定义模板会依次执行 layout OCR 和字段结构化，两次云端调用
+    // 最长可用约 180 秒；客户端需保留网络与冷启动余量。
+    receiveTimeout: const Duration(seconds: 210),
     headers: {'Content-Type': 'application/json; charset=utf-8'},
   ));
 
@@ -31,7 +33,7 @@ class ApiService {
     required String imageBase64,
     required TemplateType templateType,
     required String customFields,
-    Duration requestTimeout = const Duration(seconds: 45),
+    Duration requestTimeout = const Duration(seconds: 210),
     Duration? sendTimeout,
     Duration? connectTimeout,
     Duration? receiveTimeout,
