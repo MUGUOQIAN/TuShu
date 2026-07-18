@@ -30,6 +30,10 @@ class OcrEngineTest(unittest.TestCase):
     def tearDown(self):
         self.api_key_patch.stop()
 
+    def test_image_pixel_limit_is_checked_before_conversion(self):
+        with self.assertRaisesRegex(ValueError, "图片像素尺寸过大"):
+            ocr_engine._prepare_image_data_uri(SMALL_PNG_BASE64, max_pixels=0)
+
     @patch("ocr_engine.requests.post")
     def test_invoice_layout_text_is_structured_with_expected_fields(self, post):
         fields = TEMPLATE_MAP["invoice"]["fields"]

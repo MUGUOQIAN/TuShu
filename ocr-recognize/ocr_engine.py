@@ -113,12 +113,19 @@ def _compress_base64_image(
 
 
 def _prepare_image_data_uri(
-    image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
+    image_base64: str,
+    max_edge: int = 1280,
+    max_bytes: int = 450 * 1024,
+    max_pixels: int = 25_000_000,
 ) -> str:
     image_bytes = base64.b64decode(image_base64, validate=True)
     with Image.open(io.BytesIO(image_bytes)) as img:
         original_format = (img.format or "").upper()
         width, height = img.size
+        # 压缩率极高的图片可能字节很小但解码后占用数百 MB；必须在
+        # convert/resize 触发完整像素分配前拒绝。
+        if width <= 0 or height <= 0 or width * height > max_pixels:
+            raise ValueError("图片像素尺寸过大")
         long_edge = max(width, height)
         mime_type = _mime_type_for_format(original_format)
 
