@@ -68,14 +68,19 @@ def _compress_base64_image(
     image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
 ) -> str:
     image_bytes = base64.b64decode(image_base64)
-    # 输入已较小则不再二次压缩，避免姓名等细节文字丢失。
-    if len(image_bytes) <= 300 * 1024:
-        return image_base64
-
     with Image.open(io.BytesIO(image_bytes)) as img:
-        img = img.convert("RGB")
         width, height = img.size
         long_edge = max(width, height)
+        # data URI 固定声明为 JPEG，因此只有尺寸合适的 JPEG 才能原样复用。
+        # 仅按字节数跳过会让小体积 PNG/WebP 被错标，也会放过高分辨率图片。
+        if (
+            img.format == "JPEG"
+            and len(image_bytes) <= 300 * 1024
+            and long_edge <= max_edge
+        ):
+            return image_base64
+
+        img = img.convert("RGB")
         if long_edge > max_edge:
             scale = max_edge / long_edge
             new_size = (int(width * scale), int(height * scale))
@@ -221,7 +226,6 @@ def _extract_name(chunks: list[str]) -> str:
         "building",
     )
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Manager", "Director")
-    company_en_keywords = ("co", "ltd", "inc", "corporation", "machinery", "shanghai", "jiuxie", "company")
     cn_name_pattern = re.compile(r"[\u4e00-\u9fa5]{2,4}")
     en_name_pattern = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}\b")
     cn_en_combo_pattern = re.compile(
@@ -256,9 +260,7 @@ def _extract_name(chunks: list[str]) -> str:
         en = en_name_pattern.search(c)
         if en:
             en_name = en.group(0)
-            en_low = en_name.lower()
-            looks_like_company = any(k in en_low for k in company_en_keywords)
-            if not _looks_like_address_phrase(en_name) and not looks_like_company:
+            if not _looks_like_address_phrase(en_name) and not _looks_like_company_phrase(en_name):
                 # 若姓名行邻近职位行，优先作为最终姓名。
                 prev_chunk = chunks[i - 1] if i > 0 else ""
                 next_chunk = chunks[i + 1] if i + 1 < len(chunks) else ""
@@ -280,9 +282,7 @@ def _extract_name(chunks: list[str]) -> str:
     en = en_name_pattern.search(text)
     if en:
         en_name = en.group(0)
-        en_low = en_name.lower()
-        looks_like_company = any(k in en_low for k in company_en_keywords)
-        if not _looks_like_address_phrase(en_name) and not looks_like_company:
+        if not _looks_like_address_phrase(en_name) and not _looks_like_company_phrase(en_name):
             return en_name
     return ""
 
@@ -291,6 +291,17 @@ def _looks_like_address_phrase(value: str) -> bool:
     low = value.lower()
     address_terms = ("factory", "add", "road", "district", "building", "room")
     return any(term in low for term in address_terms)
+
+
+def _looks_like_company_phrase(value: str) -> bool:
+    # 公司缩写必须是独立单词；裸子串会把 Nicole、Scott、Lincoln 等姓名误判为公司。
+    return bool(
+        re.search(
+            r"(?<![a-z])(?:co|ltd|inc|corporation|machinery|shanghai|jiuxie|company)(?![a-z])",
+            value,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _looks_like_valid_cn_name(value: str) -> bool:
