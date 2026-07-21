@@ -112,6 +112,39 @@ class OcrEngineTest(unittest.TestCase):
         self.assertIn("/layout_parsing", post.call_args_list[0].args[0])
         self.assertIn("/chat/completions", post.call_args_list[1].args[0])
 
+    def test_custom_field_cannot_collide_with_layout_metadata(self):
+        layout_payload = {
+            "id": "layout-request-id",
+            "model": "glm-ocr",
+            "md_results": "产品模型 GLM-5",
+        }
+        chat_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"model":"GLM-5"}',
+                    }
+                }
+            ]
+        }
+
+        with patch.object(ocr_engine, "GLM_API_KEY", "test-key"), patch(
+            "ocr_engine.requests.post",
+            side_effect=[
+                FakeResponse(layout_payload),
+                FakeResponse(chat_payload),
+            ],
+        ) as post:
+            result = ocr_engine.call_llm(
+                _image_base64(),
+                "抽取 model",
+                expected_fields=["model"],
+                template_type="custom",
+            )
+
+        self.assertEqual(result, {"model": "GLM-5"})
+        self.assertEqual(post.call_count, 2)
+
     def test_handler_passes_template_context_and_rejects_empty_result(self):
         body = {
             "image_base64": "abc",

@@ -82,7 +82,11 @@ def _call_glm(
         return {}
 
     # 1) 仅把含目标业务字段的对象视为最终结果，避免把 layout 外壳误当结果。
-    structured_result = _find_structured_result(data, expected_fields)
+    structured_result = _find_structured_result(
+        data,
+        expected_fields,
+        allow_direct=template_type != "custom",
+    )
     if structured_result is not None:
         return structured_result
 
@@ -94,12 +98,14 @@ def _call_glm(
 
 
 def _find_structured_result(
-    data: dict, expected_fields: list[str] | None
+    data: dict,
+    expected_fields: list[str] | None,
+    allow_direct: bool = True,
 ) -> dict | None:
-    if not expected_fields:
+    if not expected_fields or not allow_direct:
         return None
 
-    candidates = [data]
+    candidates = []
     for key in ("data", "result"):
         candidate = data.get(key)
         if isinstance(candidate, dict):
