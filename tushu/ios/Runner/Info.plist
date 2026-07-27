@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>需要使用相机拍摄名片或发票以便识别</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要访问相册以选择名片或发票图片进行识别</string>
 </dict>
 </plist>
