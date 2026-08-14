@@ -58,15 +58,17 @@ class OcrEngineTest(unittest.TestCase):
             self.assertLessEqual(max(img.size), 1280)
 
     def test_english_name_with_co_substring_is_kept(self):
-        result = ocr_engine._map_business_card_fields(
-            [
-                "Nicole Wang",
-                "Sales Manager",
-                "13800138000",
-                "nicole@example.com",
-            ]
-        )
-        self.assertEqual("Nicole Wang", result["姓名"])
+        for name in ("Nicole Wang", "Lincoln Park", "Marco Rossi"):
+            with self.subTest(name=name):
+                result = ocr_engine._map_business_card_fields(
+                    [
+                        name,
+                        "Sales Manager",
+                        "13800138000",
+                        "person@example.com",
+                    ]
+                )
+                self.assertEqual(name, result["姓名"])
 
     def test_extract_text_chunks_reads_nested_string_layout(self):
         chunks = ocr_engine._extract_text_chunks(
