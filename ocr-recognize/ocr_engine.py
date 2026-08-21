@@ -334,12 +334,9 @@ def _extract_name(chunks: list[str]) -> str:
         "www",
         ".com",
         "factory",
-        "add",
-        "road",
-        "district",
-        "room",
-        "building",
     )
+    # 英文地址词必须按整词匹配，否则 Addison/Broadway 会被 add/road 子串误跳过。
+    skip_address_words = ("add", "road", "district", "room", "building")
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Manager", "Director")
     company_en_keywords = ("co", "ltd", "inc", "corporation", "machinery", "shanghai", "jiuxie", "company")
     cn_name_pattern = re.compile(r"[\u4e00-\u9fa5]{2,4}")
@@ -356,6 +353,8 @@ def _extract_name(chunks: list[str]) -> str:
             continue
         low = c.lower()
         if any(k.lower() in low for k in skip_keywords):
+            continue
+        if _has_whole_word(low, skip_address_words):
             continue
         if any(k in c for k in title_keywords):
             continue
@@ -377,7 +376,7 @@ def _extract_name(chunks: list[str]) -> str:
         if en:
             en_name = en.group(0)
             en_low = en_name.lower()
-            looks_like_company = _has_company_word(en_low, company_en_keywords)
+            looks_like_company = _has_whole_word(en_low, company_en_keywords)
             if not _looks_like_address_phrase(en_name) and not looks_like_company:
                 # 若姓名行邻近职位行，优先作为最终姓名。
                 prev_chunk = chunks[i - 1] if i > 0 else ""
@@ -401,19 +400,18 @@ def _extract_name(chunks: list[str]) -> str:
     if en:
         en_name = en.group(0)
         en_low = en_name.lower()
-        looks_like_company = _has_company_word(en_low, company_en_keywords)
+        looks_like_company = _has_whole_word(en_low, company_en_keywords)
         if not _looks_like_address_phrase(en_name) and not looks_like_company:
             return en_name
     return ""
 
 
 def _looks_like_address_phrase(value: str) -> bool:
-    low = value.lower()
     address_terms = ("factory", "add", "road", "district", "building", "room")
-    return any(term in low for term in address_terms)
+    return _has_whole_word(value.lower(), address_terms)
 
 
-def _has_company_word(value: str, keywords: tuple[str, ...]) -> bool:
+def _has_whole_word(value: str, keywords: tuple[str, ...]) -> bool:
     return any(re.search(rf"\b{re.escape(keyword.lower())}\b", value) for keyword in keywords)
 
 
