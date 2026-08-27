@@ -64,6 +64,8 @@ class OcrEngineTest(unittest.TestCase):
             "Marco Rossi",
             "Addison Wang",
             "Broadway Chen",
+            "Ismail Hassan",
+            "Maile Chen",
         ):
             with self.subTest(name=name):
                 result = ocr_engine._map_business_card_fields(
@@ -85,6 +87,17 @@ class OcrEngineTest(unittest.TestCase):
             ]
         )
         self.assertEqual("", result["姓名"])
+
+    def test_email_label_still_is_not_treated_as_name(self):
+        result = ocr_engine._map_business_card_fields(
+            [
+                "Email: person@example.com",
+                "Sales Manager",
+                "13800138000",
+            ]
+        )
+        self.assertNotIn("@", result["姓名"])
+        self.assertNotEqual("person@example.com", result["姓名"])
 
     def test_extract_text_chunks_reads_nested_string_layout(self):
         chunks = ocr_engine._extract_text_chunks(
