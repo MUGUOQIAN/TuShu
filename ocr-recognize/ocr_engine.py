@@ -329,14 +329,14 @@ def _extract_name(chunks: list[str]) -> str:
         "电话",
         "手机",
         "邮箱",
-        "mail",
         "@",
         "www",
         ".com",
         "factory",
     )
-    # 英文地址词必须按整词匹配，否则 Addison/Broadway 会被 add/road 子串误跳过。
-    skip_address_words = ("add", "road", "district", "room", "building")
+    # 英文地址/联系词必须按整词匹配，否则 Addison/Broadway/Ismail
+    # 会被 add/road/mail 子串误跳过。
+    skip_address_words = ("add", "road", "district", "room", "building", "mail", "email")
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Manager", "Director")
     company_en_keywords = ("co", "ltd", "inc", "corporation", "machinery", "shanghai", "jiuxie", "company")
     cn_name_pattern = re.compile(r"[\u4e00-\u9fa5]{2,4}")
