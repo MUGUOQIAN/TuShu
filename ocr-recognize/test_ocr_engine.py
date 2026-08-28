@@ -66,6 +66,7 @@ class OcrEngineTest(unittest.TestCase):
             "Broadway Chen",
             "Ismail Hassan",
             "Maile Chen",
+            "Alex Groom",
         ):
             with self.subTest(name=name):
                 result = ocr_engine._map_business_card_fields(
@@ -77,6 +78,32 @@ class OcrEngineTest(unittest.TestCase):
                     ]
                 )
                 self.assertEqual(name, result["姓名"])
+
+    def test_two_char_cn_name_with_lu_is_kept_and_not_used_as_address(self):
+        for name in ("张路", "马路"):
+            with self.subTest(name=name):
+                result = ocr_engine._map_business_card_fields(
+                    [
+                        "上海玖协机械有限公司",
+                        name,
+                        "销售经理",
+                        "13800138000",
+                        "中山路128号",
+                    ]
+                )
+                self.assertEqual(name, result["姓名"])
+                self.assertEqual("中山路128号", result["地址"])
+
+    def test_street_line_still_is_not_treated_as_name(self):
+        result = ocr_engine._map_business_card_fields(
+            [
+                "中山路128号",
+                "销售经理",
+                "13800138000",
+            ]
+        )
+        self.assertEqual("", result["姓名"])
+        self.assertEqual("中山路128号", result["地址"])
 
     def test_address_label_still_is_not_treated_as_name(self):
         result = ocr_engine._map_business_card_fields(
