@@ -293,7 +293,12 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
             title = chunk
-        if not address and any(k in chunk for k in address_keywords):
+        # 二字中文名（如“张路”）含路/街/号，不能抢占真实地址行。
+        if (
+            not address
+            and any(k in chunk for k in address_keywords)
+            and not _is_two_char_cn_name(chunk)
+        ):
             address = chunk
 
     name = _extract_name(chunks)
@@ -323,9 +328,6 @@ def _extract_name(chunks: list[str]) -> str:
         "有限",
         "集团",
         "地址",
-        "路",
-        "街",
-        "号",
         "电话",
         "手机",
         "邮箱",
@@ -334,6 +336,8 @@ def _extract_name(chunks: list[str]) -> str:
         ".com",
         "factory",
     )
+    # 路/街/号只跳过非二字中文名，避免“张路”被当成地址行丢掉。
+    cn_address_markers = ("路", "街", "号")
     # 英文地址/联系词必须按整词匹配，否则 Addison/Broadway/Ismail
     # 会被 add/road/mail 子串误跳过。
     skip_address_words = ("add", "road", "district", "room", "building", "mail", "email")
@@ -353,6 +357,8 @@ def _extract_name(chunks: list[str]) -> str:
             continue
         low = c.lower()
         if any(k.lower() in low for k in skip_keywords):
+            continue
+        if any(m in c for m in cn_address_markers) and not _is_two_char_cn_name(c):
             continue
         if _has_whole_word(low, skip_address_words):
             continue
@@ -420,4 +426,14 @@ def _looks_like_valid_cn_name(value: str) -> bool:
         return False
     # 常见地名/公司前缀，避免把“上海玖协”当人名
     non_name_prefixes = ("上海", "北京", "广州", "深圳", "中国", "公司", "集团")
-    return not any(value.startswith(prefix) for prefix in non_name_prefixes)
+    if any(value.startswith(prefix) for prefix in non_name_prefixes):
+        return False
+    # 3 字及以上含路/街/号更像路名（中山路），二字名（张路）仍保留
+    if len(value) >= 3 and any(marker in value for marker in ("路", "街", "号")):
+        return False
+    return True
+
+
+def _is_two_char_cn_name(value: str) -> bool:
+    text = value.strip()
+    return bool(re.fullmatch(r"[\u4e00-\u9fa5]{2}", text)) and _looks_like_valid_cn_name(text)
