@@ -288,18 +288,32 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Designer", "Manager")
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
+    company_chunks: list[str] = []
+    title_chunks: list[str] = []
+    address_chunks: list[tuple[bool, str]] = []
+
     for chunk in chunks:
-        if not company and any(k in chunk for k in company_keywords):
-            company = chunk
-        if not title and any(k in chunk for k in title_keywords):
-            title = chunk
+        is_company_chunk = any(k in chunk for k in company_keywords)
+        if is_company_chunk:
+            company_chunks.append(chunk)
+        # 公司名常含“销售/顾问”，不能抢占独立职位行。
+        if any(k in chunk for k in title_keywords) and not is_company_chunk:
+            title_chunks.append(chunk)
         # 二字中文名（如“张路”）含路/街/号，不能抢占真实地址行。
-        if (
-            not address
-            and any(k in chunk for k in address_keywords)
-            and not _is_two_char_cn_name(chunk)
-        ):
-            address = chunk
+        # 公司名常含“市/路/区/省”，优先使用非公司地址行。
+        if any(k in chunk for k in address_keywords) and not _is_two_char_cn_name(chunk):
+            address_chunks.append((is_company_chunk, chunk))
+
+    company = company_chunks[0] if company_chunks else ""
+    title = title_chunks[0] if title_chunks else ""
+    dedicated_addresses = [c for is_company_chunk, c in address_chunks if not is_company_chunk]
+    if dedicated_addresses:
+        address = dedicated_addresses[0]
+    elif address_chunks:
+        # 仅有“公司名+地址”混排行时，保留该行以免地址全空。
+        address = address_chunks[0][1]
+    else:
+        address = ""
 
     name = _extract_name(chunks)
 
