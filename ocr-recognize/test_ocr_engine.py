@@ -94,6 +94,79 @@ class OcrEngineTest(unittest.TestCase):
                 self.assertEqual(name, result["姓名"])
                 self.assertEqual("中山路128号", result["地址"])
 
+    def test_company_line_with_city_or_road_does_not_steal_address_or_title(self):
+        cases = (
+            (
+                [
+                    "深圳市中山科技有限公司",
+                    "李明",
+                    "销售经理",
+                    "13800138000",
+                    "中山路128号",
+                ],
+                "李明",
+                "深圳市中山科技有限公司",
+                "销售经理",
+                "中山路128号",
+            ),
+            (
+                [
+                    "广州市天河区创新有限公司",
+                    "王芳",
+                    "总监",
+                    "天河路88号",
+                ],
+                "王芳",
+                "广州市天河区创新有限公司",
+                "总监",
+                "天河路88号",
+            ),
+            (
+                [
+                    "浦东新区销售有限公司",
+                    "钱伟",
+                    "顾问",
+                    "世纪大道1号",
+                ],
+                "钱伟",
+                "浦东新区销售有限公司",
+                "顾问",
+                "世纪大道1号",
+            ),
+            (
+                [
+                    "上海销售有限公司",
+                    "周杰",
+                    "工程师",
+                    "浦东大道1号",
+                ],
+                "周杰",
+                "上海销售有限公司",
+                "工程师",
+                "浦东大道1号",
+            ),
+        )
+        for chunks, name, company, title, address in cases:
+            with self.subTest(company=company):
+                result = ocr_engine._map_business_card_fields(chunks)
+                self.assertEqual(name, result["姓名"])
+                self.assertEqual(company, result["公司"])
+                self.assertEqual(title, result["职位"])
+                self.assertEqual(address, result["地址"])
+
+    def test_mixed_company_address_line_is_kept_when_no_dedicated_address(self):
+        result = ocr_engine._map_business_card_fields(
+            [
+                "上海玖协机械有限公司 嘉定区宝安公路4999号",
+                "赵美娜",
+                "销售经理",
+            ]
+        )
+        self.assertEqual("赵美娜", result["姓名"])
+        self.assertEqual("上海玖协机械有限公司 嘉定区宝安公路4999号", result["公司"])
+        self.assertEqual("销售经理", result["职位"])
+        self.assertEqual("上海玖协机械有限公司 嘉定区宝安公路4999号", result["地址"])
+
     def test_street_line_still_is_not_treated_as_name(self):
         result = ocr_engine._map_business_card_fields(
             [
