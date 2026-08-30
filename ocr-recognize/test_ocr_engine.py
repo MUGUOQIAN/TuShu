@@ -167,6 +167,124 @@ class OcrEngineTest(unittest.TestCase):
         self.assertEqual("销售经理", result["职位"])
         self.assertEqual("上海玖协机械有限公司 嘉定区宝安公路4999号", result["地址"])
 
+    def test_title_or_contact_line_does_not_steal_street_address(self):
+        cases = (
+            (
+                [
+                    "上海玖协机械有限公司",
+                    "李明",
+                    "区域经理",
+                    "13800138000",
+                    "中山路128号",
+                ],
+                "李明",
+                "区域经理",
+                "中山路128号",
+            ),
+            (
+                [
+                    "上海玖协机械有限公司",
+                    "王芳",
+                    "市场总监",
+                    "天河路88号",
+                ],
+                "王芳",
+                "市场总监",
+                "天河路88号",
+            ),
+            (
+                [
+                    "上海建设集团有限公司",
+                    "赵强",
+                    "市政工程师",
+                    "解放路1号",
+                ],
+                "赵强",
+                "市政工程师",
+                "解放路1号",
+            ),
+            (
+                [
+                    "上海玖协机械有限公司",
+                    "张三",
+                    "销售经理",
+                    "手机号：13800138000",
+                    "中山路128号",
+                ],
+                "张三",
+                "销售经理",
+                "中山路128号",
+            ),
+            (
+                [
+                    "上海玖协机械有限公司",
+                    "张三",
+                    "工程师",
+                    "工号：10086",
+                    "中山路128号",
+                ],
+                "张三",
+                "工程师",
+                "中山路128号",
+            ),
+            (
+                [
+                    "上海玖协机械有限公司",
+                    "张三",
+                    "销售经理",
+                    "电话号码：021-12345678",
+                    "中山路128号",
+                ],
+                "张三",
+                "销售经理",
+                "中山路128号",
+            ),
+            (
+                [
+                    "上海玖协机械有限公司",
+                    "李明",
+                    "经理",
+                    "微信号：wxid_abc",
+                    "中山路128号",
+                ],
+                "李明",
+                "经理",
+                "中山路128号",
+            ),
+        )
+        for chunks, name, title, address in cases:
+            with self.subTest(title=title, decoy=chunks[-2]):
+                result = ocr_engine._map_business_card_fields(chunks)
+                self.assertEqual(name, result["姓名"])
+                self.assertEqual(title, result["职位"])
+                self.assertEqual(address, result["地址"])
+
+    def test_street_line_outranks_district_only_line(self):
+        result = ocr_engine._map_business_card_fields(
+            [
+                "上海某某有限公司",
+                "钱伟",
+                "顾问",
+                "浦东新区",
+                "世纪大道1号",
+            ]
+        )
+        self.assertEqual("钱伟", result["姓名"])
+        self.assertEqual("顾问", result["职位"])
+        self.assertEqual("世纪大道1号", result["地址"])
+
+    def test_mixed_address_and_phone_line_is_kept(self):
+        result = ocr_engine._map_business_card_fields(
+            [
+                "上海玖协机械有限公司",
+                "李明",
+                "经理",
+                "地址：中山路128号 电话：021-12345678",
+            ]
+        )
+        self.assertEqual("李明", result["姓名"])
+        self.assertEqual("地址：中山路128号 电话：021-12345678", result["地址"])
+
     def test_street_line_still_is_not_treated_as_name(self):
         result = ocr_engine._map_business_card_fields(
             [

@@ -290,28 +290,38 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
 
     company_chunks: list[str] = []
     title_chunks: list[str] = []
-    address_chunks: list[tuple[bool, str]] = []
+    # (is_company, is_strong, chunk)
+    address_chunks: list[tuple[bool, bool, str]] = []
 
     for chunk in chunks:
         is_company_chunk = any(k in chunk for k in company_keywords)
         if is_company_chunk:
             company_chunks.append(chunk)
         # 公司名常含“销售/顾问”，不能抢占独立职位行。
-        if any(k in chunk for k in title_keywords) and not is_company_chunk:
+        is_title_chunk = any(k in chunk for k in title_keywords) and not is_company_chunk
+        if is_title_chunk:
             title_chunks.append(chunk)
         # 二字中文名（如“张路”）含路/街/号，不能抢占真实地址行。
         # 公司名常含“市/路/区/省”，优先使用非公司地址行。
+        # 职位行常含“市/区”（区域经理/市场总监），手机号/工号含“号”，
+        # 都不能抢占真实街道地址。
         if any(k in chunk for k in address_keywords) and not _is_two_char_cn_name(chunk):
-            address_chunks.append((is_company_chunk, chunk))
+            strong = _has_strong_address_signal(chunk)
+            if not strong and (is_title_chunk or _is_contact_label_line(chunk)):
+                continue
+            address_chunks.append((is_company_chunk, strong, chunk))
 
     company = company_chunks[0] if company_chunks else ""
     title = title_chunks[0] if title_chunks else ""
-    dedicated_addresses = [c for is_company_chunk, c in address_chunks if not is_company_chunk]
-    if dedicated_addresses:
+    dedicated_strong = [c for is_company_chunk, strong, c in address_chunks if not is_company_chunk and strong]
+    dedicated_addresses = [c for is_company_chunk, _strong, c in address_chunks if not is_company_chunk]
+    if dedicated_strong:
+        address = dedicated_strong[0]
+    elif dedicated_addresses:
         address = dedicated_addresses[0]
     elif address_chunks:
         # 仅有“公司名+地址”混排行时，保留该行以免地址全空。
-        address = address_chunks[0][1]
+        address = address_chunks[0][2]
     else:
         address = ""
 
@@ -451,3 +461,20 @@ def _looks_like_valid_cn_name(value: str) -> bool:
 def _is_two_char_cn_name(value: str) -> bool:
     text = value.strip()
     return bool(re.fullmatch(r"[\u4e00-\u9fa5]{2}", text)) and _looks_like_valid_cn_name(text)
+
+
+_CONTACT_LABELS = ("手机", "电话", "传真", "微信", "工号", "QQ", "Tel", "Fax", "Mobile", "Phone")
+_STRONG_ADDRESS_MARKERS = ("地址", "Address", "路", "街", "道")
+
+
+def _is_contact_label_line(chunk: str) -> bool:
+    return any(label in chunk for label in _CONTACT_LABELS)
+
+
+def _has_strong_address_signal(chunk: str) -> bool:
+    if any(marker in chunk for marker in _STRONG_ADDRESS_MARKERS):
+        return True
+    # “世纪大道1号”之外，纯门牌“88号”也算地址；手机号/工号等联系行除外。
+    if "号" in chunk and re.search(r"\d", chunk) and not _is_contact_label_line(chunk):
+        return True
+    return False
