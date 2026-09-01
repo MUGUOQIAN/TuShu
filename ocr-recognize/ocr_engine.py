@@ -4,7 +4,7 @@ import json
 import re
 import requests
 from PIL import Image
-from config import GLM_API_KEY, PRIMARY_MODEL
+from config import GLM_API_KEY, PRIMARY_MODEL, STRUCTURE_MODEL
 
 try:
     _LANCZOS = Image.Resampling.LANCZOS  # Pillow>=9.1
@@ -12,22 +12,39 @@ except AttributeError:
     _LANCZOS = Image.LANCZOS  # Pillow<9.1
 
 
-def call_llm(image_base64: str, prompt: str, model: str = PRIMARY_MODEL) -> dict:
+def call_llm(
+    image_base64: str,
+    prompt: str,
+    model: str = PRIMARY_MODEL,
+    expected_fields: list[str] | None = None,
+    template_type: str = "business_card",
+) -> dict:
     """
     调用大模型API（仅GLM），返回解析后的JSON结果。
     """
-    return _call_model(image_base64, prompt, model)
+    return _call_model(image_base64, prompt, model, expected_fields or [], template_type)
 
 
-def _call_model(image_base64: str, prompt: str, model: str) -> dict:
+def _call_model(
+    image_base64: str,
+    prompt: str,
+    model: str,
+    expected_fields: list[str],
+    template_type: str,
+) -> dict:
     """实际调用模型API"""
     if model == "glm-ocr":
-        return _call_glm(image_base64, prompt)
+        return _call_glm(image_base64, prompt, expected_fields, template_type)
     else:
         raise ValueError(f"不支持的模型: {model}")
 
 
-def _call_glm(image_base64: str, prompt: str) -> dict:
+def _call_glm(
+    image_base64: str,
+    prompt: str,
+    expected_fields: list[str],
+    template_type: str,
+) -> dict:
     """调用智谱 GLM OCR API（layout_parsing）"""
     if not GLM_API_KEY:
         raise ValueError("缺少 GLM_API_KEY 环境变量")
@@ -37,9 +54,8 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
         "Authorization": f"Bearer {GLM_API_KEY}",
         "Content-Type": "application/json"
     }
-    # GLM-OCR 要求 file 使用 URL 或 data URI；先压缩可显著降低上传超时概率。
-    compressed_base64 = _compress_base64_image(image_base64)
-    file_data_uri = f"data:image/jpeg;base64,{compressed_base64}"
+    # GLM-OCR 要求 file 使用 URL 或 data URI；必要时压缩可显著降低上传超时概率。
+    file_data_uri = _prepare_image_data_uri(image_base64)
     payload = {
         "model": "glm-ocr",
         "file": file_data_uri,
@@ -53,29 +69,43 @@ def _call_glm(image_base64: str, prompt: str) -> dict:
     if not isinstance(data, dict):
         return {}
 
-    # 1) 优先尝试直接JSON结构（兼容不同返回形态）
-    if isinstance(data.get("data"), dict):
-        return data["data"]
-    if isinstance(data.get("result"), dict):
-        return data["result"]
+    # 1) 仅把含目标业务字段的对象视为最终结果，避免把 layout 外壳误当结果。
+    # 自定义模板字段名可能与 layout 元数据（如 model/id）碰撞，始终走文本二次结构化。
+    if template_type != "custom":
+        direct_result = _find_expected_field_dict(data, expected_fields)
+        if direct_result is not None:
+            return direct_result
 
-    # 2) 从 layout_parsing 结果中提取文本，再做名片字段映射
+    # 2) 从 layout_parsing 结果中提取文本，再按模板做字段抽取。
     text_chunks = _extract_text_chunks(data)
-    return _map_business_card_fields(text_chunks)
+    if template_type == "business_card":
+        return _map_business_card_fields(text_chunks)
+    if not text_chunks:
+        return {}
+    return _structure_text_fields(text_chunks, prompt, expected_fields)
 
 
-def _compress_base64_image(
-    image_base64: str, max_edge: int = 1280, max_bytes: int = 450 * 1024
+def _prepare_image_data_uri(
+    image_base64: str,
+    max_edge: int = 1280,
+    max_bytes: int = 450 * 1024,
+    max_pixels: int = 25_000_000,
 ) -> str:
-    image_bytes = base64.b64decode(image_base64)
-    # 输入已较小则不再二次压缩，避免姓名等细节文字丢失。
-    if len(image_bytes) <= 300 * 1024:
-        return image_base64
-
+    image_bytes = base64.b64decode(image_base64, validate=True)
     with Image.open(io.BytesIO(image_bytes)) as img:
-        img = img.convert("RGB")
+        original_format = (img.format or "").upper()
         width, height = img.size
+        # 压缩率极高的图片可能字节很小但解码后占用数百 MB；必须在
+        # convert/resize 触发完整像素分配前拒绝。
+        if width <= 0 or height <= 0 or width * height > max_pixels:
+            raise ValueError("图片像素尺寸过大")
         long_edge = max(width, height)
+        mime_type = _mime_type_for_format(original_format)
+
+        if mime_type and long_edge <= max_edge and len(image_bytes) <= max_bytes:
+            return f"data:{mime_type};base64,{image_base64}"
+
+        img = img.convert("RGB")
         if long_edge > max_edge:
             scale = max_edge / long_edge
             new_size = (int(width * scale), int(height * scale))
@@ -87,10 +117,21 @@ def _compress_base64_image(
             img.save(output, format="JPEG", quality=quality, optimize=True)
             result = output.getvalue()
             if len(result) <= max_bytes or quality == 35:
-                return base64.b64encode(result).decode("utf-8")
+                encoded = base64.b64encode(result).decode("utf-8")
+                return f"data:image/jpeg;base64,{encoded}"
             quality -= 10
 
-    return image_base64
+    return f"data:image/jpeg;base64,{image_base64}"
+
+
+def _mime_type_for_format(image_format: str) -> str:
+    mapping = {
+        "JPEG": "image/jpeg",
+        "JPG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+    }
+    return mapping.get(image_format, "")
 
 
 def _parse_json_from_response(content: str) -> dict:
@@ -115,26 +156,105 @@ def _parse_json_from_response(content: str) -> dict:
     return json.loads(json_str)
 
 
+def _find_expected_field_dict(data: dict, expected_fields: list[str]) -> dict | None:
+    if not expected_fields:
+        return None
+    for candidate in _candidate_dicts(data):
+        if any(field in candidate for field in expected_fields):
+            return candidate
+    return None
+
+
+def _candidate_dicts(data: dict):
+    stack = [data]
+    seen_ids = set()
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, dict):
+            continue
+        current_id = id(current)
+        if current_id in seen_ids:
+            continue
+        seen_ids.add(current_id)
+        yield current
+        for key in ("data", "result"):
+            nested = current.get(key)
+            if isinstance(nested, dict):
+                stack.append(nested)
+
+
+def _structure_text_fields(
+    text_chunks: list[str], prompt: str, expected_fields: list[str]
+) -> dict:
+    if not GLM_API_KEY:
+        raise ValueError("缺少 GLM_API_KEY 环境变量")
+
+    ocr_text = "\n".join(text_chunks)
+    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GLM_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": STRUCTURE_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你只根据用户提供的OCR文本抽取字段，并且只输出JSON对象。"
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"{prompt}\n\n"
+                    f"目标字段：{', '.join(expected_fields)}\n\n"
+                    "OCR文本如下：\n"
+                    f"{ocr_text}"
+                )
+            },
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GLM结构化请求失败 status={resp.status_code}, body={resp.text[:500]}")
+
+    data = resp.json()
+    content = ""
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError(f"GLM结构化响应缺少content: {data}") from exc
+
+    parsed = _parse_json_from_response(content)
+    nested = _find_expected_field_dict(parsed, expected_fields)
+    return nested if nested is not None else parsed
+
+
 def _extract_text_chunks(data: dict) -> list[str]:
     chunks: list[str] = []
 
-    md_results = data.get("md_results")
-    if isinstance(md_results, list):
-        for item in md_results:
-            if isinstance(item, str) and item.strip():
-                chunks.append(item.strip())
+    def append_text(value: str) -> None:
+        for line in value.splitlines():
+            line = line.strip()
+            if line:
+                chunks.append(line)
 
-    layout_details = data.get("layout_details")
-    if isinstance(layout_details, list):
-        for page_items in layout_details:
-            if not isinstance(page_items, list):
-                continue
-            for item in page_items:
-                if not isinstance(item, dict):
-                    continue
-                content = item.get("content")
-                if isinstance(content, str) and content.strip():
-                    chunks.append(content.strip())
+    def collect(value) -> None:
+        if isinstance(value, str):
+            append_text(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                collect(item)
+            return
+        if isinstance(value, dict):
+            for key in ("content", "text", "md_results", "layout_details", "data", "result"):
+                if key in value:
+                    collect(value[key])
+
+    collect(data)
 
     # 去重保序
     seen = set()
@@ -165,16 +285,58 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     address = ""
 
     company_keywords = ("公司", "有限", "集团", "Co.,Ltd", "Co., Ltd", "Ltd", "Inc", "Corporation")
-    title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Designer", "Manager")
-    address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
+    title_keywords = (
+        "经理",
+        "总监",
+        "主管",
+        "工程师",
+        "销售",
+        "总裁",
+        "主任",
+        "顾问",
+        "Designer",
+        "Manager",
+        "Director",
+    )
+
+    company_chunks: list[str] = []
+    title_chunks: list[str] = []
+    # (is_company, is_strong, chunk)
+    address_chunks: list[tuple[bool, bool, str]] = []
 
     for chunk in chunks:
-        if not company and any(k in chunk for k in company_keywords):
-            company = chunk
-        if not title and any(k in chunk for k in title_keywords):
-            title = chunk
-        if not address and any(k in chunk for k in address_keywords):
-            address = chunk
+        is_company_chunk = any(k in chunk for k in company_keywords)
+        if is_company_chunk:
+            company_chunks.append(chunk)
+        # 公司名常含“销售/顾问”，不能抢占独立职位行。
+        is_title_chunk = any(k in chunk for k in title_keywords) and not is_company_chunk
+        if is_title_chunk:
+            title_chunks.append(chunk)
+        # 二字中文名（如“张路”）含路/街/号，不能抢占真实地址行。
+        # 公司名常含“市/路/区/省”，优先使用非公司地址行。
+        # 职位行常含“市/区”（区域经理/市场总监），手机号/工号含“号”，
+        # 都不能抢占真实街道地址。
+        # 英文 Road/Street 必须整词匹配，避免 Broadway/Groom 子串误判。
+        # 「道」已是强地址信号，但漏进行检测时，滨江大道1888 会整行丢失。
+        if _looks_like_address_line(chunk) and not _is_two_char_cn_name(chunk):
+            strong = _has_strong_address_signal(chunk)
+            if not strong and (is_title_chunk or _is_contact_label_line(chunk)):
+                continue
+            address_chunks.append((is_company_chunk, strong, chunk))
+
+    company = company_chunks[0] if company_chunks else ""
+    title = title_chunks[0] if title_chunks else ""
+    dedicated_strong = [c for is_company_chunk, strong, c in address_chunks if not is_company_chunk and strong]
+    dedicated_addresses = [c for is_company_chunk, _strong, c in address_chunks if not is_company_chunk]
+    if dedicated_strong:
+        address = dedicated_strong[0]
+    elif dedicated_addresses:
+        address = dedicated_addresses[0]
+    elif address_chunks:
+        # 仅有“公司名+地址”混排行时，保留该行以免地址全空。
+        address = address_chunks[0][2]
+    else:
+        address = ""
 
     name = _extract_name(chunks)
 
@@ -203,22 +365,31 @@ def _extract_name(chunks: list[str]) -> str:
         "有限",
         "集团",
         "地址",
-        "路",
-        "街",
-        "号",
         "电话",
         "手机",
         "邮箱",
-        "mail",
         "@",
         "www",
         ".com",
         "factory",
+    )
+    # 路/街/号/道/大厦/楼/座/栋只跳过非二字中文名，避免“张路”“王道”被当成地址行丢掉。
+    cn_address_markers = ("路", "街", "号", "道", "大厦", "楼", "巷", "弄", "座", "栋")
+    # 英文地址/联系词必须按整词匹配，否则 Addison/Broadway/Ismail
+    # 会被 add/road/mail 子串误跳过。
+    skip_address_words = (
         "add",
+        "address",
         "road",
+        "street",
+        "avenue",
+        "ave",
         "district",
         "room",
         "building",
+        "floor",
+        "mail",
+        "email",
     )
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Manager", "Director")
     company_en_keywords = ("co", "ltd", "inc", "corporation", "machinery", "shanghai", "jiuxie", "company")
@@ -236,6 +407,10 @@ def _extract_name(chunks: list[str]) -> str:
             continue
         low = c.lower()
         if any(k.lower() in low for k in skip_keywords):
+            continue
+        if any(m in c for m in cn_address_markers) and not _is_two_char_cn_name(c):
+            continue
+        if _has_whole_word(low, skip_address_words):
             continue
         if any(k in c for k in title_keywords):
             continue
@@ -257,7 +432,7 @@ def _extract_name(chunks: list[str]) -> str:
         if en:
             en_name = en.group(0)
             en_low = en_name.lower()
-            looks_like_company = any(k in en_low for k in company_en_keywords)
+            looks_like_company = _has_whole_word(en_low, company_en_keywords)
             if not _looks_like_address_phrase(en_name) and not looks_like_company:
                 # 若姓名行邻近职位行，优先作为最终姓名。
                 prev_chunk = chunks[i - 1] if i > 0 else ""
@@ -281,16 +456,52 @@ def _extract_name(chunks: list[str]) -> str:
     if en:
         en_name = en.group(0)
         en_low = en_name.lower()
-        looks_like_company = any(k in en_low for k in company_en_keywords)
+        looks_like_company = _has_whole_word(en_low, company_en_keywords)
         if not _looks_like_address_phrase(en_name) and not looks_like_company:
             return en_name
     return ""
 
 
 def _looks_like_address_phrase(value: str) -> bool:
-    low = value.lower()
-    address_terms = ("factory", "add", "road", "district", "building", "room")
-    return any(term in low for term in address_terms)
+    address_terms = (
+        "factory",
+        "add",
+        "address",
+        "road",
+        "street",
+        "avenue",
+        "ave",
+        "district",
+        "building",
+        "room",
+        "floor",
+    )
+    return _has_whole_word(value.lower(), address_terms)
+
+
+_CN_ADDRESS_KEYWORDS = ("地址", "路", "街", "号", "区", "市", "省", "道", "大厦", "楼", "巷", "弄", "座", "栋")
+_EN_ADDRESS_WORDS = (
+    "add",
+    "address",
+    "road",
+    "street",
+    "avenue",
+    "ave",
+    "district",
+    "building",
+    "room",
+    "floor",
+)
+
+
+def _looks_like_address_line(chunk: str) -> bool:
+    if any(k in chunk for k in _CN_ADDRESS_KEYWORDS) or "Address" in chunk:
+        return True
+    return _has_whole_word(chunk.lower(), _EN_ADDRESS_WORDS)
+
+
+def _has_whole_word(value: str, keywords: tuple[str, ...]) -> bool:
+    return any(re.search(rf"\b{re.escape(keyword.lower())}\b", value) for keyword in keywords)
 
 
 def _looks_like_valid_cn_name(value: str) -> bool:
@@ -298,4 +509,34 @@ def _looks_like_valid_cn_name(value: str) -> bool:
         return False
     # 常见地名/公司前缀，避免把“上海玖协”当人名
     non_name_prefixes = ("上海", "北京", "广州", "深圳", "中国", "公司", "集团")
-    return not any(value.startswith(prefix) for prefix in non_name_prefixes)
+    if any(value.startswith(prefix) for prefix in non_name_prefixes):
+        return False
+    # 3 字及以上含路/街/号/道/大厦/楼/座/栋更像地址（中山路/滨江大道/科技大厦），二字名（张路/王道）仍保留
+    if len(value) >= 3 and any(marker in value for marker in ("路", "街", "号", "道", "大厦", "楼", "座", "栋")):
+        return False
+    return True
+
+
+def _is_two_char_cn_name(value: str) -> bool:
+    text = value.strip()
+    return bool(re.fullmatch(r"[\u4e00-\u9fa5]{2}", text)) and _looks_like_valid_cn_name(text)
+
+
+_CONTACT_LABELS = ("手机", "电话", "传真", "微信", "工号", "QQ", "Tel", "Fax", "Mobile", "Phone")
+_STRONG_ADDRESS_MARKERS = ("地址", "Address", "路", "街", "道", "大厦", "座", "栋")
+_STRONG_EN_ADDRESS_WORDS = ("address", "road", "street", "avenue", "ave", "building", "floor")
+
+
+def _is_contact_label_line(chunk: str) -> bool:
+    return any(label in chunk for label in _CONTACT_LABELS)
+
+
+def _has_strong_address_signal(chunk: str) -> bool:
+    if any(marker in chunk for marker in _STRONG_ADDRESS_MARKERS):
+        return True
+    if _has_whole_word(chunk.lower(), _STRONG_EN_ADDRESS_WORDS):
+        return True
+    # “世纪大道1号”之外，纯门牌“88号”也算地址；手机号/工号等联系行除外。
+    if "号" in chunk and re.search(r"\d", chunk) and not _is_contact_label_line(chunk):
+        return True
+    return False
