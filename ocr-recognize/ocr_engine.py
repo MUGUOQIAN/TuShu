@@ -169,6 +169,14 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
+        # 「公司电话：021-…」「公司地址：南京路…」含强公司词「公司」，
+        # 若排在公司名之前会占住公司字段，真实公司名被丢掉。
+        labeled = _split_company_contact_label(chunk)
+        if labeled is not None:
+            kind, rest = labeled
+            if kind == "地址" and not address and rest:
+                address = rest
+            continue
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
@@ -187,6 +195,38 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
         "邮箱": email or "",
         "地址": address or "",
     }
+
+
+# 更长的前缀必须排在前面。「公司地址」不能被更短的「公司」先当成公司名。
+_COMPANY_CONTACT_LABELS = (
+    ("公司地址", "地址"),
+    ("单位地址", "地址"),
+    ("办公地址", "地址"),
+    ("注册地址", "地址"),
+    ("通讯地址", "地址"),
+    ("联系地址", "地址"),
+    ("公司电话", "电话"),
+    ("公司座机", "电话"),
+    ("公司传真", "传真"),
+    ("公司邮箱", "邮箱"),
+    ("公司邮件", "邮箱"),
+    ("公司网址", "网址"),
+    ("公司网站", "网址"),
+    ("公司总机", "电话"),
+)
+
+
+def _split_company_contact_label(chunk: str) -> tuple[str, str] | None:
+    """识别「公司地址：…」这类联系标签。返回 (类型, 标签后的值)。"""
+    text = chunk.strip()
+    if not text:
+        return None
+    for prefix, kind in _COMPANY_CONTACT_LABELS:
+        if text == prefix:
+            return kind, ""
+        if text.startswith(prefix) and text[len(prefix)] in " \t:：":
+            return kind, text[len(prefix) :].lstrip(" \t:：")
+    return None
 
 
 def _first_match(pattern: str, text: str) -> str:
