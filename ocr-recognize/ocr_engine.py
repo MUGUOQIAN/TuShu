@@ -173,7 +173,10 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
             title = chunk
-        if not address and any(k in chunk for k in address_keywords):
+        # 「分机号：8001」「总机号：021-…」含「号」和数字，会抢在真实街道地址之前占住地址。
+        if not address and not _is_extension_number_line(chunk) and any(
+            k in chunk for k in address_keywords
+        ):
             address = chunk
 
     name = _extract_name(chunks)
@@ -187,6 +190,25 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
         "邮箱": email or "",
         "地址": address or "",
     }
+
+
+# 「分机：8001」不含「号」，不会进地址候选；名片上更常见的是「分机号：8001」。
+_EXTENSION_NUMBER_LABELS = ("分机号", "总机号", "直线号", "内线号", "外线号", "专线号")
+
+
+def _is_extension_number_line(chunk: str) -> bool:
+    """分机/总机/直线号码不是街道地址。无分隔符的公司名（如「直线号技术服务有限公司」）仍保留。"""
+    text = chunk.strip()
+    if not text:
+        return False
+    for label in _EXTENSION_NUMBER_LABELS:
+        if text == label:
+            return True
+        if text.startswith(label):
+            nxt = text[len(label)]
+            if nxt in " \t:：0123456789０１２３４５６７８９":
+                return True
+    return False
 
 
 def _first_match(pattern: str, text: str) -> str:
