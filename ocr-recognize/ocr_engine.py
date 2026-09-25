@@ -169,6 +169,9 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
+        # 「开户银行：工商银行股份有限公司」「银行账号：6222…」会抢在真实公司或街道地址之前占住字段。
+        if _is_bank_detail_line(chunk):
+            continue
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
@@ -187,6 +190,36 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
         "邮箱": email or "",
         "地址": address or "",
     }
+
+
+# 「开户行：工商银行」不含「银行」二字连写；名片上更常见的是「开户银行：…」「银行账号：…」。
+_BANK_DETAIL_LABELS = (
+    "开户银行",
+    "收款银行",
+    "汇款银行",
+    "结算银行",
+    "银行账号",
+    "银行卡号",
+    "银行账户",
+    "收款账号",
+    "基本户账号",
+    "对公账号",
+)
+
+
+def _is_bank_detail_line(chunk: str) -> bool:
+    """开户银行/银行账号不是姓名、公司或街道地址。无分隔符的公司名（如「开户银行技术服务有限公司」）仍保留。"""
+    text = chunk.strip()
+    if not text:
+        return False
+    for label in _BANK_DETAIL_LABELS:
+        if text == label:
+            return True
+        if text.startswith(label):
+            nxt = text[len(label)]
+            if nxt in " \t:：0123456789０１２３４５６７８９":
+                return True
+    return False
 
 
 def _first_match(pattern: str, text: str) -> str:
@@ -234,6 +267,8 @@ def _extract_name(chunks: list[str]) -> str:
         c = chunk.strip()
         if not c:
             continue
+        if _is_bank_detail_line(c):
+            continue
         low = c.lower()
         if any(k.lower() in low for k in skip_keywords):
             continue
@@ -275,7 +310,7 @@ def _extract_name(chunks: list[str]) -> str:
     cn = cn_name_pattern.search(text)
     if cn:
         cn_name = cn.group(0)
-        if _looks_like_valid_cn_name(cn_name):
+        if _looks_like_valid_cn_name(cn_name) and not _is_bank_detail_line(cn_name):
             return cn_name
     en = en_name_pattern.search(text)
     if en:
