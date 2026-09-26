@@ -169,6 +169,14 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
+        # 「公司手机：138…」「集团电话：021-…」「集团地址：南京路…」含强公司词
+        # 「公司/集团」。排在公司名之前时会占住公司，真实公司名被丢掉。
+        labeled = _split_org_contact_label(chunk)
+        if labeled is not None:
+            kind, rest = labeled
+            if kind == "地址" and not address and rest:
+                address = rest
+            continue
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
@@ -187,6 +195,55 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
         "邮箱": email or "",
         "地址": address or "",
     }
+
+
+# 更长的前缀必须排在前面，避免「分公司电话」被更短的前缀截断。
+_ORG_CONTACT_LABELS = (
+    ("分公司地址", "地址"),
+    ("总公司地址", "地址"),
+    ("子公司地址", "地址"),
+    ("分公司电话", "电话"),
+    ("总公司电话", "电话"),
+    ("子公司电话", "电话"),
+    ("分公司手机", "电话"),
+    ("总公司手机", "电话"),
+    ("公司手机", "电话"),
+    ("公司固话", "电话"),
+    ("集团地址", "地址"),
+    ("集团电话", "电话"),
+    ("集团座机", "电话"),
+    ("集团手机", "电话"),
+    ("集团固话", "电话"),
+    ("集团传真", "传真"),
+    ("集团总机", "电话"),
+    ("集团邮箱", "邮箱"),
+    ("集团邮件", "邮箱"),
+    ("集团网址", "网址"),
+    ("集团网站", "网址"),
+)
+
+
+def _split_org_contact_label(chunk: str) -> tuple[str, str] | None:
+    """识别「公司手机：…」「集团电话：…」这类组织联系标签。
+
+    返回 (类型, 标签后的值)。无分隔符或数字的公司名（如「集团电话技术服务有限公司」）仍保留。
+    """
+    text = chunk.strip()
+    if not text:
+        return None
+    for label, kind in _ORG_CONTACT_LABELS:
+        if text == label:
+            return kind, ""
+        if text.startswith(label):
+            nxt = text[len(label)]
+            if nxt in " \t:：0123456789０１２３４５６７８９":
+                return kind, text[len(label) :].lstrip(" \t:：")
+    return None
+
+
+def _is_org_contact_name_fragment(value: str) -> bool:
+    """全局回退会把「分公司电话」的前四字当成姓名。"""
+    return any(label.startswith(value) for label, _kind in _ORG_CONTACT_LABELS)
 
 
 def _first_match(pattern: str, text: str) -> str:
@@ -234,6 +291,8 @@ def _extract_name(chunks: list[str]) -> str:
         c = chunk.strip()
         if not c:
             continue
+        if _split_org_contact_label(c) is not None:
+            continue
         low = c.lower()
         if any(k.lower() in low for k in skip_keywords):
             continue
@@ -275,7 +334,7 @@ def _extract_name(chunks: list[str]) -> str:
     cn = cn_name_pattern.search(text)
     if cn:
         cn_name = cn.group(0)
-        if _looks_like_valid_cn_name(cn_name):
+        if _looks_like_valid_cn_name(cn_name) and not _is_org_contact_name_fragment(cn_name):
             return cn_name
     en = en_name_pattern.search(text)
     if en:
