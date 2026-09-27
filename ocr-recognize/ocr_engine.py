@@ -146,6 +146,37 @@ def _extract_text_chunks(data: dict) -> list[str]:
     return ordered
 
 
+def _department_token_at(text: str, start: int) -> str:
+    """从 start 起读取连续汉字，用来识别「人力资源部」这类部门词。"""
+    end = start
+    while end < len(text) and "\u4e00" <= text[end] <= "\u9fff":
+        end += 1
+    return text[start:end]
+
+
+def _is_department_token(token: str) -> bool:
+    # 整词三到十二字且以「部」结尾：市场部、销售部、人力资源部。
+    # 「部」单独占一字，所以前面至少还要两个汉字；二字姓名不会命中。
+    return bool(re.fullmatch(r"[\u4e00-\u9fa5]{2,11}部", token))
+
+
+def _is_department_only_line(chunk: str) -> bool:
+    """整行只是部门名（可带空冒号），不能拿来当职位或街道地址。"""
+    text = chunk.strip().strip(" \t:：")
+    return _is_department_token(text)
+
+
+def _first_valid_cn_name(text: str, pattern: re.Pattern) -> str:
+    for match in pattern.finditer(text):
+        # 「人力资源部」只会被正则取走前四字「人力资源」，部还在后面。
+        if _is_department_token(_department_token_at(text, match.start())):
+            continue
+        cn_name = match.group(0)
+        if _looks_like_valid_cn_name(cn_name):
+            return cn_name
+    return ""
+
+
 def _map_business_card_fields(chunks: list[str]) -> dict:
     text = "\n".join(chunks)
 
@@ -169,11 +200,14 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
+        # 「市场部 / 市场营销部」含「市」，「销售部」含「销售」，
+        # 会抢在真实街道和职位之前占住字段。部门行不是地址或职位。
+        department_only = _is_department_only_line(chunk)
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
-        if not title and any(k in chunk for k in title_keywords):
+        if not department_only and not title and any(k in chunk for k in title_keywords):
             title = chunk
-        if not address and any(k in chunk for k in address_keywords):
+        if not department_only and not address and any(k in chunk for k in address_keywords):
             address = chunk
 
     name = _extract_name(chunks)
@@ -248,11 +282,9 @@ def _extract_name(chunks: list[str]) -> str:
             if _looks_like_valid_cn_name(cn_name) and not _looks_like_address_phrase(en_name):
                 return f"{cn_name} ({en_name})"
 
-        cn = cn_name_pattern.search(c)
-        if cn:
-            cn_name = cn.group(0)
-            if _looks_like_valid_cn_name(cn_name):
-                return cn_name
+        cn_name = _first_valid_cn_name(c, cn_name_pattern)
+        if cn_name:
+            return cn_name
         en = en_name_pattern.search(c)
         if en:
             en_name = en.group(0)
@@ -272,11 +304,9 @@ def _extract_name(chunks: list[str]) -> str:
     if english_name_candidate:
         return english_name_candidate
 
-    cn = cn_name_pattern.search(text)
-    if cn:
-        cn_name = cn.group(0)
-        if _looks_like_valid_cn_name(cn_name):
-            return cn_name
+    cn_name = _first_valid_cn_name(text, cn_name_pattern)
+    if cn_name:
+        return cn_name
     en = en_name_pattern.search(text)
     if en:
         en_name = en.group(0)
