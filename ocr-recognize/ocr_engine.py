@@ -146,6 +146,92 @@ def _extract_text_chunks(data: dict) -> list[str]:
     return ordered
 
 
+# 长词在前，避免「董事长」被拆成「董事」。这些词不是人名。
+_GOVERNANCE_TITLES = (
+    "名誉董事长",
+    "非执行董事",
+    "独立董事",
+    "执行董事",
+    "常务董事",
+    "副理事长",
+    "常务理事",
+    "名誉会长",
+    "监事长",
+    "副会长",
+    "理事长",
+    "董事长",
+    "监事",
+    "董事",
+    "会长",
+    "理事",
+    "委员",
+    "院士",
+    "股东",
+)
+
+# 职称去掉后剩下的组织词，不能当成同行人名。
+_GOVERNANCE_NAME_BLOCKLIST = (
+    "工作室",
+    "事务所",
+    "办公室",
+    "委员会",
+    "协会",
+    "系统",
+    "介绍",
+    "会议",
+    "科技",
+    "工业",
+    "机械",
+    "集团",
+    "公司",
+    "有限",
+)
+
+
+def _is_governance_person_name(value: str) -> bool:
+    if not re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", value):
+        return False
+    if value in _GOVERNANCE_TITLES or value in _GOVERNANCE_NAME_BLOCKLIST:
+        return False
+    if any(word in value for word in _GOVERNANCE_NAME_BLOCKLIST):
+        return False
+    return _looks_like_valid_cn_name(value)
+
+
+def _split_governance_line(chunk: str) -> tuple[str, str] | None:
+    """识别「监事 / 会长 张三 / 王芳监事」这种职务行。
+
+    返回 (职务, 姓名)。整行只有职务时姓名为空。不是这类行时返回 None。
+    """
+    raw = chunk.strip()
+    if not raw:
+        return None
+    normalized = re.sub(r"[\s:：/|·•]+", " ", raw).strip()
+    compact = re.sub(r"[\s:：/|·•]+", "", raw)
+    for title in _GOVERNANCE_TITLES:
+        if normalized == title:
+            return title, ""
+        prefix = f"{title} "
+        if normalized.startswith(prefix):
+            rest = normalized[len(prefix) :].strip()
+            if _is_governance_person_name(rest):
+                return title, rest
+        suffix = f" {title}"
+        if normalized.endswith(suffix):
+            rest = normalized[: -len(suffix)].strip()
+            if _is_governance_person_name(rest):
+                return title, rest
+        if compact.startswith(title) and compact != title:
+            rest = compact[len(title) :]
+            if _is_governance_person_name(rest):
+                return title, rest
+        if compact.endswith(title) and compact != title:
+            rest = compact[: -len(title)]
+            if _is_governance_person_name(rest):
+                return title, rest
+    return None
+
+
 def _map_business_card_fields(chunks: list[str]) -> dict:
     text = "\n".join(chunks)
 
@@ -163,18 +249,26 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     name = ""
     title = ""
     address = ""
+    governance_title = ""
 
     company_keywords = ("公司", "有限", "集团", "Co.,Ltd", "Co., Ltd", "Ltd", "Inc", "Corporation")
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Designer", "Manager")
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
+        governance = _split_governance_line(chunk)
+        if governance and governance[0] and not governance_title:
+            governance_title = governance[0]
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
             title = chunk
         if not address and any(k in chunk for k in address_keywords):
             address = chunk
+
+    # 监事/会长本身不是「经理」这类职位词；没有其他职位时才用它，避免盖住销售经理。
+    if not title:
+        title = governance_title
 
     name = _extract_name(chunks)
 
@@ -235,6 +329,19 @@ def _extract_name(chunks: list[str]) -> str:
         if not c:
             continue
         low = c.lower()
+        governance = _split_governance_line(c)
+        if governance is not None:
+            # 「监事」「会长 张三」不能把职务写成姓名，否则下一行真实姓名被丢掉。
+            if governance[1]:
+                return governance[1]
+            continue
+        # 「院士工作室」「委员会」以职务起头，但整行不是人名。
+        compact = re.sub(r"[\s:：/|·•]+", "", c)
+        if any(
+            compact.startswith(title) or compact.endswith(title)
+            for title in _GOVERNANCE_TITLES
+        ):
+            continue
         if any(k.lower() in low for k in skip_keywords):
             continue
         if any(k in c for k in title_keywords):
