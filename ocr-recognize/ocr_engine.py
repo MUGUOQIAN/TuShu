@@ -146,6 +146,191 @@ def _extract_text_chunks(data: dict) -> list[str]:
     return ordered
 
 
+# 这些简称/职称正好是 2–4 个汉字，会被姓名正则整词吞掉。
+# 「经理 / 工程师 / 设计师」等已有职位词不在这里重复。
+_SHORT_JOB_TITLES = (
+    "常务副总",
+    "执行副总",
+    "建筑师",
+    "结构师",
+    "咨询师",
+    "经济师",
+    "税务师",
+    "理财师",
+    "规划师",
+    "评估师",
+    "统计师",
+    "教师",
+    "副总",
+    "总工",
+    "高工",
+    "助工",
+    "董秘",
+    "总助",
+    "注会",
+    "专家",
+    "导师",
+    "博导",
+)
+
+# 只出现在职称前面的修饰，不能当成同行里的人名。
+_TITLE_MODIFIERS = (
+    "博士生",
+    "硕士生",
+    "研究生",
+    "副主任",
+    "高级",
+    "资深",
+    "首席",
+    "特聘",
+    "特邀",
+    "外聘",
+    "兼职",
+    "名誉",
+    "常务",
+    "执行",
+    "助理",
+    "主任",
+    "中级",
+    "初级",
+    "一级",
+    "二级",
+    "三级",
+    "正高",
+    "副高",
+    "特级",
+    "技术",
+    "业务",
+    "市场",
+    "产品",
+    "财务",
+    "法律",
+    "税务",
+    "心理",
+    "结构",
+    "注册",
+    "专业",
+    "行业",
+    "销售",
+    "临床",
+    "责任",
+    "指导",
+    "学术",
+    "企业",
+    "产业",
+    "客座",
+    "校外",
+    "博士",
+    "硕士",
+    "副",
+    "正",
+)
+
+# 职称去掉后剩下的组织词或更长职位，不能当成同行人名。
+_TITLE_NAME_BLOCKLIST = (
+    "工作室",
+    "事务所",
+    "办公室",
+    "委员会",
+    "协会",
+    "公司",
+    "有限",
+    "集团",
+    "介绍",
+    "经理",
+    "总监",
+    "主管",
+    "工程师",
+    "总裁",
+    "顾问",
+    "董事",
+    "监事",
+    "秘书",
+    "会计",
+    "资格",
+    "证书",
+)
+
+
+def _compact_title_text(chunk: str) -> str:
+    return re.sub(r"[\s:：/|·•,，;；]+", "", chunk.strip())
+
+
+def _is_only_title_modifiers(text: str) -> bool:
+    if not text:
+        return True
+    rest = text
+    while rest:
+        matched = ""
+        for word in sorted(_TITLE_MODIFIERS, key=len, reverse=True):
+            if rest.startswith(word):
+                matched = word
+                break
+        if not matched:
+            return False
+        rest = rest[len(matched) :]
+    return True
+
+
+def _is_short_title_person_name(value: str) -> bool:
+    if not re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", value):
+        return False
+    # 「总工程师」去掉「总工」后会剩下「程师」，不能当人名。
+    if value.endswith("师"):
+        return False
+    if value in _SHORT_JOB_TITLES or value in _TITLE_MODIFIERS or value in _TITLE_NAME_BLOCKLIST:
+        return False
+    if any(word in value for word in _TITLE_NAME_BLOCKLIST):
+        return False
+    if any(word in value for word in _TITLE_MODIFIERS if len(word) >= 2):
+        return False
+    return _looks_like_valid_cn_name(value)
+
+
+def _split_short_title_line(chunk: str) -> tuple[str, str] | None:
+    """识别「副总 / 高工 张三 / 张三董秘 / 高级经济师」。
+
+    返回 (职称, 姓名)。整行只有职称时姓名为空。不是这类行时返回 None。
+    """
+    compact = _compact_title_text(chunk)
+    if not compact:
+        return None
+
+    for title in sorted(_SHORT_JOB_TITLES, key=len, reverse=True):
+        if compact.endswith(title) and len(compact) > len(title):
+            prefix = compact[: -len(title)]
+            if _is_short_title_person_name(prefix):
+                return title, prefix
+
+        index = compact.find(title)
+        if index < 0:
+            continue
+        prefix = compact[:index]
+        suffix = compact[index + len(title) :]
+        if not _is_only_title_modifiers(prefix):
+            continue
+        if suffix == "":
+            return compact, ""
+        if _is_short_title_person_name(suffix):
+            return prefix + title, suffix
+    return None
+
+
+def _fallback_blocks_cn_token(token: str, chunks: list[str]) -> bool:
+    """全局回退不能再把职称的前 2–4 个字当成姓名。"""
+    parsed = _split_short_title_line(token)
+    if parsed is not None:
+        return True
+    for chunk in chunks:
+        compact = _compact_title_text(chunk)
+        if not compact.startswith(token) or compact == token:
+            continue
+        parsed_chunk = _split_short_title_line(chunk)
+        if parsed_chunk is not None and not parsed_chunk[1]:
+            return True
+    return False
+
+
 def _map_business_card_fields(chunks: list[str]) -> dict:
     text = "\n".join(chunks)
 
@@ -163,18 +348,26 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     name = ""
     title = ""
     address = ""
+    short_title = ""
 
     company_keywords = ("公司", "有限", "集团", "Co.,Ltd", "Co., Ltd", "Ltd", "Inc", "Corporation")
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Designer", "Manager")
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
+        parsed_title = _split_short_title_line(chunk)
+        if parsed_title and parsed_title[0] and not short_title:
+            short_title = parsed_title[0]
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
             title = chunk
         if not address and any(k in chunk for k in address_keywords):
             address = chunk
+
+    # 副总/高工本身不含「经理」。已有销售经理等职位时不要用简称盖住它。
+    if not title:
+        title = short_title
 
     name = _extract_name(chunks)
 
@@ -235,6 +428,19 @@ def _extract_name(chunks: list[str]) -> str:
         if not c:
             continue
         low = c.lower()
+        parsed_title = _split_short_title_line(c)
+        if parsed_title is not None:
+            # 「副总」「高工 张三」不能把职称写成姓名，否则真实姓名被丢掉。
+            if parsed_title[1]:
+                return parsed_title[1]
+            continue
+        compact_title = _compact_title_text(c)
+        # 「专家工作室」「总工程师」以简称起头，整行不是人名。
+        if any(
+            compact_title.startswith(title) or compact_title.endswith(title)
+            for title in _SHORT_JOB_TITLES
+        ):
+            continue
         if any(k.lower() in low for k in skip_keywords):
             continue
         if any(k in c for k in title_keywords):
@@ -275,7 +481,7 @@ def _extract_name(chunks: list[str]) -> str:
     cn = cn_name_pattern.search(text)
     if cn:
         cn_name = cn.group(0)
-        if _looks_like_valid_cn_name(cn_name):
+        if _looks_like_valid_cn_name(cn_name) and not _fallback_blocks_cn_token(cn_name, chunks):
             return cn_name
     en = en_name_pattern.search(text)
     if en:
