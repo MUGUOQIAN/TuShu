@@ -146,6 +146,162 @@ def _extract_text_chunks(data: dict) -> list[str]:
     return ordered
 
 
+# 这些职务正好是 3 个汉字，且不含「经理/总监/销售」。
+# 姓名正则会整段吞掉，或把「高级业务员」截成「高级业务」。
+_STAFF_TITLES = ("业务员", "技术员", "办事员", "操作员")
+_STAFF_MODIFIERS = (
+    "高级",
+    "资深",
+    "见习",
+    "初级",
+    "中级",
+    "助理",
+    "实习",
+    "华东",
+    "华南",
+    "华北",
+    "华中",
+    "西南",
+    "西北",
+    "东北",
+)
+# 这些词出现在职务行前后时不是人名，也不能把公司名拆成姓名。
+_STAFF_NAME_BLOCKLIST = _STAFF_MODIFIERS + (
+    "销售",
+    "经理",
+    "总监",
+    "主管",
+    "工程师",
+    "总裁",
+    "主任",
+    "顾问",
+    "公司",
+    "有限",
+    "集团",
+    "科技",
+    "服务",
+    "培训",
+    "中心",
+    "数控",
+    "联系",
+)
+_EXISTING_TITLE_MARKERS = ("销售", "经理", "总监", "主管", "工程师", "总裁", "主任", "顾问")
+
+
+def _compact_staff_text(chunk: str) -> str:
+    return re.sub(r"[\s:：/|·•,，;；]+", "", chunk.strip())
+
+
+def _chunk_is_company_like(text: str) -> bool:
+    return any(keyword in text for keyword in ("有限", "公司", "集团", "株式", "会社"))
+
+
+def _chunk_has_staff_title(chunk: str) -> bool:
+    compact = _compact_staff_text(chunk)
+    return any(title in compact for title in _STAFF_TITLES)
+
+
+def _is_only_staff_modifiers(text: str) -> bool:
+    if not text:
+        return True
+    rest = text
+    consumed = False
+    while rest:
+        matched = ""
+        for word in sorted(_STAFF_MODIFIERS, key=len, reverse=True):
+            if rest.startswith(word):
+                matched = word
+                break
+        # 「华东区业务员」里的区是大区后缀，不是街道。
+        if not matched and consumed and rest.startswith("区"):
+            matched = "区"
+        if not matched:
+            return False
+        consumed = True
+        rest = rest[len(matched) :]
+    return True
+
+
+def _staff_line_lacks_street(chunk: str) -> bool:
+    """职务行里的「区/市」不能抢地址；行内另有街道时仍保留。"""
+    if not _chunk_has_staff_title(chunk) or _chunk_is_company_like(chunk):
+        return False
+    return not any(marker in chunk for marker in ("路", "街", "号", "道", "巷", "弄", "大厦"))
+
+
+def _is_staff_person_name(value: str) -> bool:
+    if not re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", value):
+        return False
+    if any(title in value for title in _STAFF_TITLES):
+        return False
+    if any(word in value for word in _STAFF_NAME_BLOCKLIST):
+        return False
+    return _looks_like_valid_cn_name(value)
+
+
+def _leading_staff_person(text: str) -> str:
+    if not text:
+        return ""
+    matched = re.match(r"[\u4e00-\u9fa5]{2,4}", text)
+    if not matched:
+        return ""
+    name = matched.group(0)
+    rest = text[matched.end() :]
+    if rest and not re.fullmatch(r"[A-Za-z0-9 .'+-]+", rest):
+        return ""
+    if not _is_staff_person_name(name):
+        return ""
+    return name
+
+
+def _split_staff_line(chunk: str) -> tuple[str, str] | None:
+    """识别「业务员 / 高级技术员 / 业务员张三 / 张三操作员」。
+
+    返回 (职务, 姓名)。整行只有职务时姓名为空。不是这类行时返回 None。
+    """
+    compact = _compact_staff_text(chunk)
+    if not compact or _chunk_is_company_like(compact):
+        return None
+    # 「销售业务员」已经含「销售」，继续走原有职位逻辑。
+    if any(marker in compact for marker in _EXISTING_TITLE_MARKERS):
+        return None
+
+    for title in sorted(_STAFF_TITLES, key=len, reverse=True):
+        index = compact.find(title)
+        if index < 0:
+            continue
+        prefix = compact[:index]
+        suffix = compact[index + len(title) :]
+        if prefix and not _is_only_staff_modifiers(prefix):
+            if suffix == "" and _is_staff_person_name(prefix):
+                return title, prefix
+            person = _leading_staff_person(suffix)
+            if person:
+                return title, person
+            return None
+        person = _leading_staff_person(suffix)
+        if suffix and not person:
+            return None
+        shown = f"{prefix}{title}" if prefix else title
+        return shown, person
+    return None
+
+
+def _fallback_blocks_staff_token(token: str, chunks: list[str]) -> bool:
+    """全局回退不能再把职务行的前几个字当成姓名。"""
+    if any(title in token for title in _STAFF_TITLES):
+        return True
+    for chunk in chunks:
+        compact = _compact_staff_text(chunk)
+        if _chunk_is_company_like(compact):
+            continue
+        if not any(title in compact for title in _STAFF_TITLES):
+            continue
+        if compact.startswith(token) and compact != token:
+            return True
+    return False
+
+
 def _map_business_card_fields(chunks: list[str]) -> dict:
     text = "\n".join(chunks)
 
@@ -163,18 +319,30 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     name = ""
     title = ""
     address = ""
+    staff_title = ""
 
     company_keywords = ("公司", "有限", "集团", "Co.,Ltd", "Co., Ltd", "Ltd", "Inc", "Corporation")
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Designer", "Manager")
     address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
+        parsed_staff = _split_staff_line(chunk)
+        if parsed_staff and parsed_staff[0] and not staff_title:
+            staff_title = parsed_staff[0]
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
             title = chunk
-        if not address and any(k in chunk for k in address_keywords):
+        if (
+            not address
+            and any(k in chunk for k in address_keywords)
+            and not _staff_line_lacks_street(chunk)
+        ):
             address = chunk
+
+    # 业务员/技术员不含「经理」。已有销售经理等职位时不要用职务行盖住它。
+    if not title:
+        title = staff_title
 
     name = _extract_name(chunks)
 
@@ -235,6 +403,14 @@ def _extract_name(chunks: list[str]) -> str:
         if not c:
             continue
         low = c.lower()
+        parsed_staff = _split_staff_line(c)
+        if parsed_staff is not None:
+            # 「业务员」「业务员张三」不能把职务写成姓名，否则真实姓名被丢掉。
+            if parsed_staff[1]:
+                return parsed_staff[1]
+            continue
+        if _chunk_has_staff_title(c) and not _chunk_is_company_like(c):
+            continue
         if any(k.lower() in low for k in skip_keywords):
             continue
         if any(k in c for k in title_keywords):
@@ -275,7 +451,7 @@ def _extract_name(chunks: list[str]) -> str:
     cn = cn_name_pattern.search(text)
     if cn:
         cn_name = cn.group(0)
-        if _looks_like_valid_cn_name(cn_name):
+        if _looks_like_valid_cn_name(cn_name) and not _fallback_blocks_staff_token(cn_name, chunks):
             return cn_name
     en = en_name_pattern.search(text)
     if en:
@@ -298,4 +474,8 @@ def _looks_like_valid_cn_name(value: str) -> bool:
         return False
     # 常见地名/公司前缀，避免把“上海玖协”当人名
     non_name_prefixes = ("上海", "北京", "广州", "深圳", "中国", "公司", "集团")
-    return not any(value.startswith(prefix) for prefix in non_name_prefixes)
+    if any(value.startswith(prefix) for prefix in non_name_prefixes):
+        return False
+    if any(title in value for title in _STAFF_TITLES):
+        return False
+    return True
