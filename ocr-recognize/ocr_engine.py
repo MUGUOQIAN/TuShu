@@ -3,7 +3,7 @@ import io
 import json
 import re
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 from config import GLM_API_KEY, PRIMARY_MODEL
 
 try:
@@ -73,6 +73,11 @@ def _compress_base64_image(
         return image_base64
 
     with Image.open(io.BytesIO(image_bytes)) as img:
+        # 手机相机常用 EXIF Orientation 表示竖拍，像素本身仍是横的。
+        # 下面会重新编码成 JPEG 且不保留 EXIF；不先烘焙方向的话，名片会横过来识别。
+        transposed = ImageOps.exif_transpose(img)
+        if transposed is not None:
+            img = transposed
         img = img.convert("RGB")
         width, height = img.size
         long_edge = max(width, height)
