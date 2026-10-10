@@ -8,6 +8,17 @@ import '../widgets/template_selector.dart';
 import '../models/template.dart';
 import 'result_page.dart';
 
+/// 只拍摄静帧。默认打开音频会同时申请麦克风：
+/// Android 上拒绝麦克风后相机创建直接失败，预览和快门都不可用；
+/// iOS 上缺少麦克风用途说明时，初始化会直接崩溃。
+CameraController createStillPhotoController(CameraDescription description) {
+  return CameraController(
+    description,
+    ResolutionPreset.medium,
+    enableAudio: false,
+  );
+}
+
 class CameraPage extends StatefulWidget {
   const CameraPage({super.key});
 
@@ -31,7 +42,7 @@ class _CameraPageState extends State<CameraPage> {
   Future<void> _initCamera() async {
     _cameras = await availableCameras();
     if (_cameras.isNotEmpty) {
-      _controller = CameraController(_cameras[0], ResolutionPreset.medium);
+      _controller = createStillPhotoController(_cameras[0]);
       await _controller!.initialize();
       setState(() {});
     }
