@@ -46,7 +46,7 @@ class ExcelService {
     final sheet = excel['Sheet1'];
 
     // 如果Sheet为空，先写表头
-    if (sheet.maxCols == 0) {
+    if (sheet.maxColumns == 0) {
       sheet.appendRow(data.keys.toList());
     }
 

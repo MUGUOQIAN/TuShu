@@ -33,7 +33,7 @@ dependencies:
   camera: ^0.10.5          # 自定义相机
   image_picker: ^1.0.4     # 从相册选图
   dio: ^5.3.2              # 网络请求
-  excel: ^2.1.0            # 生成Excel文件
+  excel: ^3.0.0            # 生成Excel文件。2.1.0 要求 Dart SDK <3.0.0，无法在本工程解析。
   share_plus: ^7.2.1       # 系统分享
   path_provider: ^2.1.1    # 获取本地存储路径
   permission_handler: ^11.1.0  # 权限管理
