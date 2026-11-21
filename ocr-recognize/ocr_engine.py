@@ -151,13 +151,8 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
 
     email = _first_match(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
 
-    # 手机优先匹配中国大陆11位
-    mobile = _first_match(r"(?<!\d)1[3-9]\d{9}(?!\d)", text)
-
-    # 座机示例：021-12345678 / 02112345678
-    landline = _first_match(r"(?<!\d)(0\d{2,3}-?\d{7,8})(?!\d)", text)
-    if landline == mobile:
-        landline = ""
+    mobile = _extract_mobile(text)
+    landline = _extract_landline(text, mobile)
 
     company = ""
     name = ""
@@ -187,6 +182,132 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
         "邮箱": email or "",
         "地址": address or "",
     }
+
+
+# 全角数字和常见横线先折成 ASCII，避免「１３８…」「86－21－…」匹配失败。
+_PHONE_FOLD = str.maketrans({
+    "０": "0",
+    "１": "1",
+    "２": "2",
+    "３": "3",
+    "４": "4",
+    "５": "5",
+    "６": "6",
+    "７": "7",
+    "８": "8",
+    "９": "9",
+    "＋": "+",
+    "－": "-",
+    "—": "-",
+    "–": "-",
+    "―": "-",
+    "−": "-",
+    "．": ".",
+    "。": ".",
+})
+# 只允许号码内部的分隔符，最多连续 3 个。不包含换行，避免把相邻两行的无关数字粘成一个电话。
+_PHONE_GAP = r"[ \t\u3000.·•()（）\-]{1,3}"
+_MOBILE_LOOSE = re.compile(
+    rf"(?<!\d)(?:\+?86(?:{_PHONE_GAP})?)?(1[3-9](?:(?:{_PHONE_GAP})?\d){{9}})(?!\d)"
+)
+_LANDLINE_LOOSE = re.compile(
+    rf"(?<!\d)(?P<prefix>\+?86(?:{_PHONE_GAP})?)?(?P<num>0?\d{{2,3}}(?:(?:{_PHONE_GAP})?\d){{7,8}})(?!\d)"
+)
+_THREE_DIGIT_AREAS = {"010", "020", "021", "022", "023", "024", "025", "027", "028", "029"}
+
+
+def _fold_phone_text(text: str) -> str:
+    return text.translate(_PHONE_FOLD)
+
+
+def _digits_only(value: str) -> str:
+    return re.sub(r"\D", "", value)
+
+
+def _extract_mobile(text: str) -> str:
+    """提取中国大陆手机号。
+
+    连续 11 位仍按原样返回。`138-1234-5678`、`+86 138 1234 5678`、
+    `86-13120543237` 这类名片印刷格式会先去掉分隔符再校验。
+    """
+    folded = _fold_phone_text(text)
+    direct = _first_match(r"(?<!\d)1[3-9]\d{9}(?!\d)", folded)
+    if direct:
+        return direct
+
+    match = _MOBILE_LOOSE.search(folded)
+    if not match:
+        return ""
+    digits = _digits_only(match.group(1))
+    if re.fullmatch(r"1[3-9]\d{9}", digits):
+        return digits
+    return ""
+
+
+def _format_landline(digits: str) -> str:
+    """把区号+本地号规范成 0xx-xxxxxxx。无法可靠拆分时返回空字符串。"""
+    if digits.startswith("0"):
+        trunk = digits
+    else:
+        trunk = "0" + digits
+    if not re.fullmatch(r"0\d{9,11}", trunk):
+        return ""
+    if trunk.startswith(("0400", "0800", "400", "800")):
+        return ""
+
+    if trunk[:3] in _THREE_DIGIT_AREAS and len(trunk) in (10, 11):
+        area, local = trunk[:3], trunk[3:]
+    elif len(trunk) == 12:
+        area, local = trunk[:4], trunk[4:]
+    elif len(trunk) == 11:
+        area, local = trunk[:4], trunk[4:]
+    else:
+        area, local = trunk[:3], trunk[3:]
+
+    if len(local) not in (7, 8):
+        return ""
+    return f"{area}-{local}"
+
+
+def _landline_has_signal(raw: str, had_country: bool) -> bool:
+    if had_country or raw.startswith("0"):
+        return True
+    return bool(re.search(r"[-.（）()]", raw))
+
+
+def _extract_landline(text: str, mobile: str) -> str:
+    """提取座机。优先非传真号码。
+
+    接受 `021-12345678`、`86-21-60542168`、`(010) 6234-5678`。
+    不把手机号、400/800、纯数字的微博/订单号当成座机。
+    """
+    folded = _fold_phone_text(text)
+    candidates = []
+    for match in _LANDLINE_LOOSE.finditer(folded):
+        raw = match.group("num")
+        had_country = bool(match.group("prefix"))
+        if not _landline_has_signal(raw, had_country):
+            continue
+        digits = _digits_only(raw)
+        if digits == mobile or re.fullmatch(r"1[3-9]\d{9}", digits):
+            continue
+        if digits.startswith(("400", "800")):
+            continue
+        formatted = _format_landline(digits)
+        if not formatted:
+            continue
+        if _digits_only(formatted).lstrip("0") == mobile:
+            continue
+        prefix = folded[max(0, match.start() - 16) : match.start()]
+        is_fax = bool(re.search(r"fax|传真", prefix, re.IGNORECASE))
+        candidates.append((is_fax, match.start(), formatted))
+
+    if not candidates:
+        return ""
+    plain = [item for item in candidates if not item[0]]
+    chosen = plain or candidates
+    chosen.sort(key=lambda item: item[1])
+    return chosen[0][2]
 
 
 def _first_match(pattern: str, text: str) -> str:
