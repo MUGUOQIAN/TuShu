@@ -194,9 +194,233 @@ def _first_match(pattern: str, text: str) -> str:
     return m.group(1) if m and m.lastindex else (m.group(0) if m else "")
 
 
-def _extract_name(chunks: list[str]) -> str:
-    text = "\n".join(chunks)
+# 职务行里常见的职称。长词必须排在短词前面，避免「销售经理」被拆成「销售」+「经理」。
+_TITLE_LINE_TITLES = (
+    "副总经理",
+    "总经理",
+    "销售经理",
+    "销售总监",
+    "销售主管",
+    "总工程师",
+    "经理",
+    "总监",
+    "主管",
+    "工程师",
+    "销售",
+    "总裁",
+    "主任",
+    "顾问",
+)
+# 只从姓名两侧剥掉这些修饰，避免「高级销售经理张三」把修饰留在姓名里。
+_TITLE_LINE_MODIFIERS = (
+    "大客户",
+    "办公室",
+    "事业部",
+    "华东区",
+    "华南区",
+    "华北区",
+    "华中区",
+    "西南区",
+    "西北区",
+    "东北区",
+    "高级",
+    "资深",
+    "见习",
+    "初级",
+    "中级",
+    "助理",
+    "常务",
+    "执行",
+    "副总",
+    "客户",
+    "区域",
+    "市场",
+    "产品",
+    "项目",
+    "渠道",
+    "技术",
+    "财务",
+    "人事",
+    "行政",
+    "运营",
+    "商务",
+    "法律",
+    "战略",
+    "管理",
+    "投资",
+    "国内",
+    "海外",
+    "华南",
+    "华东",
+    "华北",
+    "华中",
+    "西南",
+    "西北",
+    "东北",
+    "全国",
+    "客服",
+    "部门",
+    "本部",
+    "热线",
+    "专线",
+)
+_TITLE_LINE_CONNECTORS = ("部", "处", "科", "组", "中心")
+# 公司简称紧挨职位时不能当人名，例如「久协机械销售经理」。
+_TITLE_LINE_NOT_NAME = (
+    "机械",
+    "科技",
+    "设备",
+    "贸易",
+    "实业",
+    "电子",
+    "网络",
+    "信息",
+    "工程",
+    "制造",
+    "国际",
+    "股份",
+    "产业",
+    "咨询",
+    "集团",
+    "公司",
+    "有限",
+    "热线",
+    "专线",
+    "微信",
+    "邮箱",
+    "网址",
+    "部门",
+    "本部",
+    "分机",
+    "总机",
+    "直线",
+    "客服",
+)
+_EN_TITLE_PHRASES = (
+    "general manager",
+    "sales manager",
+    "sales director",
+    "general director",
+    "manager",
+    "director",
+    "designer",
+    "senior",
+    "vice",
+    "deputy",
+    "executive",
+    "assistant",
+    "chief",
+)
 
+
+def _strip_title_edges(text: str) -> str:
+    words = sorted(set(_TITLE_LINE_TITLES + _TITLE_LINE_MODIFIERS + _TITLE_LINE_CONNECTORS), key=len, reverse=True)
+    changed = True
+    while text and changed:
+        changed = False
+        for word in words:
+            if text.startswith(word):
+                text = text[len(word):]
+                changed = True
+                break
+            if text.endswith(word):
+                text = text[: -len(word)]
+                changed = True
+                break
+    # 「李总」要保留；「张伟总」「副」这种贴在职位上的称呼才剥掉。
+    changed = True
+    while text and changed:
+        changed = False
+        if text in ("副", "总", "副总"):
+            return ""
+        for char in ("副", "总"):
+            if text.endswith(char) and len(text) - 1 >= 2:
+                text = text[:-1]
+                changed = True
+                break
+            if text.startswith(char) and len(text) - 1 >= 2:
+                text = text[1:]
+                changed = True
+                break
+    return text
+
+
+def _is_title_line_person_name(value: str) -> bool:
+    if not re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", value):
+        return False
+    if not _looks_like_valid_cn_name(value):
+        return False
+    return not any(fragment in value for fragment in _TITLE_LINE_NOT_NAME)
+
+
+def _cn_name_from_title_line(chunk: str) -> str:
+    compact = re.sub(r"[^\u4e00-\u9fa5]", "", chunk)
+    if not compact:
+        return ""
+    for title in sorted(set(_TITLE_LINE_TITLES), key=len, reverse=True):
+        index = compact.find(title)
+        if index < 0:
+            continue
+        prefix = _strip_title_edges(compact[:index])
+        suffix = _strip_title_edges(compact[index + len(title):])
+        if prefix and suffix:
+            continue
+        candidate = prefix or suffix
+        # 整段就是职务时停住，避免从「总经理」里再拆出「总」。
+        if not candidate:
+            return ""
+        if _is_title_line_person_name(candidate):
+            return candidate
+    return ""
+
+
+def _english_name_blocked(value: str) -> bool:
+    blocked = (
+        "factory",
+        "add",
+        "road",
+        "district",
+        "building",
+        "room",
+        "co",
+        "ltd",
+        "inc",
+        "corporation",
+        "machinery",
+        "shanghai",
+        "jiuxie",
+        "company",
+    )
+    low = value.lower()
+    return any(re.search(rf"\b{re.escape(word)}\b", low) for word in blocked)
+
+
+def _english_name_from_title_line(chunk: str) -> str:
+    text = re.sub(r"[\u4e00-\u9fa5]+", " ", chunk)
+    for phrase in sorted(_EN_TITLE_PHRASES, key=len, reverse=True):
+        text = re.sub(re.escape(phrase), " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:Mr|Ms|Mrs|Miss|Dr)\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[^A-Za-z]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not re.fullmatch(r"[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}", text):
+        return ""
+    if _english_name_blocked(text):
+        return ""
+    return text
+
+
+def _name_from_title_line(chunk: str) -> str:
+    """从「张三 总经理」这类职务行取出人名。整行只有职务时返回空字符串。"""
+    if any(keyword in chunk for keyword in ("公司", "有限", "集团", "株式", "会社", "Ltd", "Inc", "Corporation")):
+        return ""
+    cn_name = _cn_name_from_title_line(chunk)
+    en_name = _english_name_from_title_line(chunk)
+    if cn_name and en_name:
+        return f"{cn_name} ({en_name})"
+    return cn_name or en_name
+
+
+def _extract_name(chunks: list[str]) -> str:
     # 先在单行里找疑似姓名，避免全局命中公司简称（如“上海玖协”）
     skip_keywords = (
         "公司",
@@ -229,6 +453,8 @@ def _extract_name(chunks: list[str]) -> str:
     )
 
     english_name_candidate = ""
+    title_line_name = ""
+    title_lines = set()
 
     for i, chunk in enumerate(chunks):
         c = chunk.strip()
@@ -238,6 +464,11 @@ def _extract_name(chunks: list[str]) -> str:
         if any(k.lower() in low for k in skip_keywords):
             continue
         if any(k in c for k in title_keywords):
+            # 公司行已经在上面跳过。这里保留「张三 总经理」里的人名，
+            # 否则全局回退会把公司名或职务的前几个字当成姓名。
+            title_lines.add(c)
+            if not title_line_name:
+                title_line_name = _name_from_title_line(c)
             continue
 
         # 优先中英同现的人名行，例如：赵美娜 Shermin Zhao
@@ -268,16 +499,20 @@ def _extract_name(chunks: list[str]) -> str:
                 if not english_name_candidate:
                     english_name_candidate = en_name
 
-    # 回退：全局搜索
+    # 回退：全局搜索。职务行里已经抽出的人名优先于公司名片段。
+    # 职务行本身不再参与回退，避免「高级销售经理」被截成「高级销售」。
     if english_name_candidate:
         return english_name_candidate
+    if title_line_name:
+        return title_line_name
 
-    cn = cn_name_pattern.search(text)
+    fallback_text = "\n".join(chunk for chunk in chunks if chunk.strip() not in title_lines)
+    cn = cn_name_pattern.search(fallback_text)
     if cn:
         cn_name = cn.group(0)
         if _looks_like_valid_cn_name(cn_name):
             return cn_name
-    en = en_name_pattern.search(text)
+    en = en_name_pattern.search(fallback_text)
     if en:
         en_name = en.group(0)
         en_low = en_name.lower()
