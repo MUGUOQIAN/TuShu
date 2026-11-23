@@ -151,8 +151,8 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
 
     email = _first_match(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
 
-    # 手机优先匹配中国大陆11位
-    mobile = _first_match(r"(?<!\d)1[3-9]\d{9}(?!\d)", text)
+    # 有多个手机号时优先「手机 / Mobile / M:」，避免被前面的电话或热线盖掉。
+    mobile = _extract_mobile(text)
 
     # 座机示例：021-12345678 / 02112345678
     landline = _first_match(r"(?<!\d)(0\d{2,3}-?\d{7,8})(?!\d)", text)
@@ -187,6 +187,40 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
         "邮箱": email or "",
         "地址": address or "",
     }
+
+
+_MOBILE_PATTERN = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
+# 标签和号码之间只允许冒号、空白和国家码，且只看同一行，避免上一行「手机配件」误伤。
+_LABEL_TAIL = r"\s*[:：]?\s*(?:\+?86[\s\-.]*)?$"
+_PERSONAL_MOBILE_LABEL = re.compile(
+    r"(?:手机号码|手机号|手机|移动电话|移动号码|Mobile|Cell)"
+    + _LABEL_TAIL
+    + r"|(?:^|[\s（(/])M\s*[:：.]?\s*(?:\+?86[\s\-.]*)?$",
+    re.IGNORECASE,
+)
+_NON_PERSONAL_MOBILE_LABEL = re.compile(
+    r"(?:公司|单位|集团|总机|热线|客服|前台)\s*(?:手机号码|手机号|手机)"
+    + _LABEL_TAIL
+)
+
+
+def _extract_mobile(text: str) -> str:
+    """提取手机号。多个大陆 11 位号码时，优先同一行标有手机/Mobile/M 的那个。
+
+    只有一个号码，或没有任何个人标签时，仍取文本中的第一个，和原先一致。
+    「公司手机」「热线手机」不算个人标签；若同时还有「手机」，保留后者。
+    """
+    matches = list(_MOBILE_PATTERN.finditer(text))
+    if not matches:
+        return ""
+    for match in matches:
+        line_start = text.rfind("\n", 0, match.start(1)) + 1
+        prefix = text[line_start:match.start(1)]
+        if _NON_PERSONAL_MOBILE_LABEL.search(prefix):
+            continue
+        if _PERSONAL_MOBILE_LABEL.search(prefix):
+            return match.group(1)
+    return matches[0].group(1)
 
 
 def _first_match(pattern: str, text: str) -> str:
