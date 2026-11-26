@@ -162,20 +162,17 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
     company = ""
     name = ""
     title = ""
-    address = ""
 
     company_keywords = ("公司", "有限", "集团", "Co.,Ltd", "Co., Ltd", "Ltd", "Inc", "Corporation")
     title_keywords = ("经理", "总监", "主管", "工程师", "销售", "总裁", "主任", "顾问", "Designer", "Manager")
-    address_keywords = ("地址", "路", "街", "号", "区", "市", "省", "Address")
 
     for chunk in chunks:
         if not company and any(k in chunk for k in company_keywords):
             company = chunk
         if not title and any(k in chunk for k in title_keywords):
             title = chunk
-        if not address and any(k in chunk for k in address_keywords):
-            address = chunk
 
+    address = _extract_address(chunks)
     name = _extract_name(chunks)
 
     return {
@@ -187,6 +184,87 @@ def _map_business_card_fields(chunks: list[str]) -> dict:
         "邮箱": email or "",
         "地址": address or "",
     }
+
+
+# 与原先地址关键词一致；英文 “Address” 仍算地址行起点。
+_CN_ADDRESS_START = ("地址", "路", "街", "号", "区", "市", "省", "Address")
+# 只有路名、门牌、楼栋才算完整街道。单独的“市/区/省”不算，否则会在下一行丢掉路名。
+_STRONG_STREET_RE = re.compile(
+    r"(?:路|街|巷|弄|栋|幢|楼|层|室|座|大厦|广场|园区|大道|街道|\d+号)"
+    r"|\b(?:road|street|avenue|lane|boulevard|drive)\b"
+    r"|\bbuilding\s+no\.?\b",
+    re.IGNORECASE,
+)
+_EN_ADDRESS_START_RE = re.compile(
+    r"\b(?:road|street|avenue|lane|boulevard|drive)\b"
+    r"|\bbuilding\s+no\.?\b"
+    r"|\baddress\b"
+    r"|\badd\s*:",
+    re.IGNORECASE,
+)
+_CONTACT_LINE_RE = re.compile(
+    r"(手机|电话|座机|传真|邮箱|微信|@|\b(?:Tel|Fax|Mobile|E-?mail)\b)",
+    re.IGNORECASE,
+)
+
+
+def _is_contact_line(chunk: str) -> bool:
+    return _CONTACT_LINE_RE.search(chunk) is not None
+
+
+def _has_strong_street(chunk: str) -> bool:
+    return _STRONG_STREET_RE.search(chunk) is not None
+
+
+def _is_cn_address_start(chunk: str) -> bool:
+    return any(keyword in chunk for keyword in _CN_ADDRESS_START)
+
+
+def _join_address_parts(parts: list[str]) -> str:
+    merged = parts[0].strip()
+    for part in parts[1:]:
+        part = part.strip()
+        if not part:
+            continue
+        if merged and merged[-1].isascii() and part[0].isascii():
+            merged = f"{merged} {part}"
+        else:
+            merged += part
+    return merged
+
+
+def _extract_address(chunks: list[str]) -> str:
+    """提取地址。区县和路名被拆成两行时拼回去；没有 Address 标签的英文街道也保留。
+
+    已经含路名或门牌的行不再吞掉下一行，避免把中文地址的英文译文再拼一次。
+    夹在区县和路名之间的电话行不会写进地址。
+    """
+    start = None
+    for index, chunk in enumerate(chunks):
+        if _is_cn_address_start(chunk):
+            start = index
+            break
+    if start is None:
+        for index, chunk in enumerate(chunks):
+            if chunk.strip() and _EN_ADDRESS_START_RE.search(chunk):
+                start = index
+                break
+    if start is None:
+        return ""
+
+    first = chunks[start].strip()
+    if _has_strong_street(first) or _is_contact_line(first):
+        return first
+
+    parts = [first]
+    for chunk in chunks[start + 1 :]:
+        text = chunk.strip()
+        if not text or _is_contact_line(text):
+            continue
+        if not _has_strong_street(text):
+            break
+        parts.append(text)
+    return _join_address_parts(parts)
 
 
 def _first_match(pattern: str, text: str) -> str:
